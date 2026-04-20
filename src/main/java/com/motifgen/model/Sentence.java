@@ -49,7 +49,7 @@ public class Sentence {
 
     @Override
     public String toString() {
-        return "Sentence[key=%s, structure=%s, bars=%d, score=%.3f]"
+        return "Sentence[key=%s, structure=%s, bars=%d, score=%.1f]"
                 .formatted(keyName, structure, totalBars(), score);
     }
 }

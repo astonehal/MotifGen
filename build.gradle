@@ -15,6 +15,14 @@ repositories {
     mavenCentral()
 }
 
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+}
+
+test {
+    useJUnitPlatform()
+}
+
 application {
     mainClass = 'com.motifgen.MotifGen'
 }
