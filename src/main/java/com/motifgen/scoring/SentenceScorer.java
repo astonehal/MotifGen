@@ -237,31 +237,43 @@ public class SentenceScorer {
 
     int gaps = 0;
     int filled = 0;
+    int stepwise = 0;
+    int totalIntervals = pitched.size() - 1;
 
-    for (int i = 1; i < pitched.size() - 1; i++) {
+    for (int i = 1; i < pitched.size(); i++) {
       int interval = pitched.get(i).pitch() - pitched.get(i - 1).pitch();
-      if (Math.abs(interval) > 4) { // large leap
+
+      if (Math.abs(interval) <= 2) {
+        stepwise++;
+      }
+
+      if (Math.abs(interval) > 4 && i < pitched.size() - 1) { // large leap
         gaps++;
         // Check if next note(s) move stepwise in opposite direction
         int nextInterval = pitched.get(i + 1).pitch() - pitched.get(i).pitch();
         boolean oppositeDirection = (interval > 0 && nextInterval < 0)
             || (interval < 0 && nextInterval > 0);
-        boolean stepwise = Math.abs(nextInterval) <= 2;
-        if (oppositeDirection && stepwise) {
+        boolean isStepwise = Math.abs(nextInterval) <= 2;
+        if (oppositeDirection && isStepwise) {
           filled++;
         }
       }
     }
 
-    if (gaps == 0) return 0.8; // no gaps is reasonably predictable
-    return clamp((double) filled / gaps);
+    // Combine gap-fill ratio with overall stepwise motion ratio
+    double gapFillScore = gaps == 0 ? 0.8 : (double) filled / gaps;
+    double stepwiseRatio = (double) stepwise / totalIntervals;
+
+    return clamp(0.5 * gapFillScore + 0.5 * stepwiseRatio);
   }
 
   // ---------- Factor 3: Pitch Range Compactness (0.15) ----------
 
   /**
    * Rewards melodies within a singable, compact range.
-   * Ideal: <= 12 semitones (one octave). Penalizes extremes.
+   * Sweet spot: 7-19 semitones (a fifth to an octave+fifth).
+   * Gentle decay beyond that — generated sentences often span 2+ octaves
+   * due to transformations like inversion and climax building.
    */
   private double scorePitchRangeCompactness(List<Note> pitched) {
     int min = pitched.stream().mapToInt(Note::pitch).min().orElse(60);
@@ -272,15 +284,15 @@ public class SentenceScorer {
       // Too narrow — penalize
       return 0.3 + (range / 5.0) * 0.3;
     }
-    if (range <= 12) {
-      // Sweet spot: compact singable range
+    if (range <= 19) {
+      // Sweet spot: compact singable range (up to octave+fifth)
       return 1.0;
     }
-    if (range <= 24) {
-      // Linear decay from 1.0 at 12 to 0.0 at 24
-      return 1.0 - (double) (range - 12) / 12.0;
+    if (range <= 36) {
+      // Gradual decay from 1.0 at 19 to 0.1 at 36 (3 octaves)
+      return 1.0 - 0.9 * (double) (range - 19) / 17.0;
     }
-    return 0.0;
+    return 0.1;
   }
 
   // ---------- Factor 4: Rhythmic Simplicity (0.15) ----------

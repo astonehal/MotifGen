@@ -117,7 +117,7 @@ class SentenceScorerTest {
 
   @Test
   void compactRangeScoresHigh() {
-    // All within one octave (C4 to B4 = 11 semitones)
+    // All within about an octave+fifth (C4 to G5 = 19 semitones)
     int[] pitches = {60, 62, 64, 65, 67, 69, 71, 67,
         65, 64, 62, 60, 64, 67, 65, 62};
     Motif m = makeMotif(pitches);
