@@ -2,7 +2,10 @@
 build/
 *.class
 *.jar
+!gradle/wrapper/gradle-wrapper.jar
 *.log
 .idea/
 *.iml
 .vscode/
+.claude/
+output/

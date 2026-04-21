@@ -1,6 +1,7 @@
 plugins {
     id 'java'
     id 'application'
+    id 'jacoco'
 }
 
 group = 'com.motifgen'
@@ -14,6 +15,93 @@ java {
 repositories {
     mavenCentral()
 }
+
+// --- E2E test source set ---
+
+sourceSets {
+    e2eTest {
+        java.srcDir 'src/e2eTest/java'
+        compileClasspath += sourceSets.main.output + sourceSets.test.output
+        runtimeClasspath += sourceSets.main.output + sourceSets.test.output
+    }
+}
+
+configurations {
+    e2eTestImplementation.extendsFrom testImplementation
+    e2eTestRuntimeOnly.extendsFrom testRuntimeOnly
+}
+
+dependencies {
+    testImplementation 'org.junit.jupiter:junit-jupiter:5.11.4'
+}
+
+// --- Unit tests ---
+
+test {
+    useJUnitPlatform()
+    finalizedBy jacocoTestReport
+}
+
+jacocoTestReport {
+    dependsOn test
+    reports {
+        xml.required = true
+        html.required = true
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/unit/html')
+        xml.outputLocation = layout.buildDirectory.file('reports/jacoco/unit/jacocoTestReport.xml')
+    }
+}
+
+jacocoTestCoverageVerification {
+    dependsOn jacocoTestReport
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+// --- E2E tests ---
+
+tasks.register('e2eTest', Test) {
+    description = 'Runs end-to-end tests.'
+    group = 'verification'
+    testClassesDirs = sourceSets.e2eTest.output.classesDirs
+    classpath = sourceSets.e2eTest.runtimeClasspath
+    useJUnitPlatform()
+    finalizedBy 'jacocoE2eTestReport'
+}
+
+tasks.register('jacocoE2eTestReport', JacocoReport) {
+    dependsOn e2eTest
+    executionData e2eTest
+    sourceSets sourceSets.main
+    reports {
+        xml.required = true
+        html.required = true
+        html.outputLocation = layout.buildDirectory.dir('reports/jacoco/e2e/html')
+        xml.outputLocation = layout.buildDirectory.file('reports/jacoco/e2e/jacocoE2eTestReport.xml')
+    }
+}
+
+tasks.register('jacocoE2eTestCoverageVerification', JacocoCoverageVerification) {
+    dependsOn 'jacocoE2eTestReport'
+    executionData e2eTest
+    sourceSets sourceSets.main
+    violationRules {
+        rule {
+            limit {
+                minimum = 0.80
+            }
+        }
+    }
+}
+
+// --- Wire into check ---
+
+check.dependsOn jacocoTestCoverageVerification, 'jacocoE2eTestCoverageVerification'
 
 application {
     mainClass = 'com.motifgen.MotifGen'

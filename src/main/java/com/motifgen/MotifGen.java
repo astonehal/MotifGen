@@ -1,11 +1,11 @@
 package com.motifgen;
 
+import com.motifgen.exporter.MidiExporter;
+import com.motifgen.exporter.MusicXMLExporter;
 import com.motifgen.generator.SentenceGenerator;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
-import com.motifgen.scoring.MidiExporter;
-import com.motifgen.scoring.MusicXMLExporter;
 import com.motifgen.scoring.SentenceScorer;
 import com.motifgen.theory.KeyDetector;
 
@@ -18,7 +18,9 @@ import java.util.List;
  * Loads a 4-bar motif from a MIDI or MusicXML file, detects its key,
  * and generates two 16-bar sentences using music theory techniques.
  * Produces multiple candidates in related keys and selects the best
- * based on consonance, climax placement, rhythm diversity, contour, range, and cadence.
+ * based on catchiness factors: repetition, contour predictability,
+ * pitch range compactness, rhythmic simplicity, internal conventionality,
+ * and hook prominence.
  *
  * Usage: java -jar MotifGen.jar <input.mid|input.xml> [output_directory] [tempo_bpm] [format]
  */
@@ -96,9 +98,11 @@ public class MotifGen {
         for (int i = 0; i < ranked.size(); i++) {
             Sentence s = ranked.get(i);
             SentenceScorer.ScoreBreakdown bd = scorer.breakdown(s);
-            System.out.printf("  %2d. %-40s  score: %.4f%n", i + 1, s, bd.total());
-            System.out.printf("      consonance=%.3f  climax=%.3f  rhythm=%.3f  contour=%.3f  range=%.3f  cadence=%.3f%n",
-                    bd.consonance(), bd.climax(), bd.rhythmDiversity(), bd.contour(), bd.range(), bd.cadence());
+            System.out.printf("  %2d. %-40s  score: %.1f  [%s]%n", i + 1, s, bd.total(),
+                    SentenceScorer.bandLabel(bd.total()));
+            System.out.printf("      repetition=%.3f  contour=%.3f  compactness=%.3f  rhythm=%.3f  conventionality=%.3f  hook=%.3f%n",
+                    bd.repetition(), bd.contourPredictability(), bd.pitchRangeCompactness(),
+                    bd.rhythmicSimplicity(), bd.internalConventionality(), bd.hookProminence());
         }
 
         // 5. Select best two sentences
@@ -117,13 +121,14 @@ public class MotifGen {
 
             System.out.printf("%n  Sentence %d: %s%n", i + 1, sentence);
             SentenceScorer.ScoreBreakdown bd = scorer.breakdown(sentence);
-            System.out.printf("    Consonance:      %.3f%n", bd.consonance());
-            System.out.printf("    Climax:          %.3f%n", bd.climax());
-            System.out.printf("    Rhythm Diversity: %.3f%n", bd.rhythmDiversity());
-            System.out.printf("    Contour:         %.3f%n", bd.contour());
-            System.out.printf("    Range:           %.3f%n", bd.range());
-            System.out.printf("    Cadence:         %.3f%n", bd.cadence());
-            System.out.printf("    TOTAL:           %.4f%n", bd.total());
+            System.out.printf("    Repetition:              %.3f%n", bd.repetition());
+            System.out.printf("    Contour Predictability:  %.3f%n", bd.contourPredictability());
+            System.out.printf("    Pitch Range Compactness: %.3f%n", bd.pitchRangeCompactness());
+            System.out.printf("    Rhythmic Simplicity:     %.3f%n", bd.rhythmicSimplicity());
+            System.out.printf("    Internal Conventionality:%.3f%n", bd.internalConventionality());
+            System.out.printf("    Hook Prominence:         %.3f%n", bd.hookProminence());
+            System.out.printf("    TOTAL:                   %.1f / 100  [%s]%n",
+                    bd.total(), SentenceScorer.bandLabel(bd.total()));
 
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
@@ -185,8 +190,8 @@ public class MotifGen {
         System.out.println("  3. Generate sentence candidates in related keys using:");
         System.out.println("     - Sequence, inversion, retrograde, augmentation");
         System.out.println("     - Embellishment, fragmentation, variation");
-        System.out.println("  4. Score each candidate on consonance, climax, rhythm,");
-        System.out.println("     contour, range, and cadential strength");
+        System.out.println("  4. Score each candidate on catchiness (repetition, contour,");
+        System.out.println("     compactness, rhythm, conventionality, hook prominence)");
         System.out.println("  5. Output the two best 16-bar sentences as MIDI and/or MusicXML files");
     }
 }

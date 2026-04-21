@@ -1,4 +1,4 @@
-package com.motifgen.scoring;
+package com.motifgen.exporter;
 
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
