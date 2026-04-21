@@ -1,11 +1,11 @@
 package com.motifgen;
 
+import com.motifgen.exporter.MidiExporter;
+import com.motifgen.exporter.MusicXMLExporter;
 import com.motifgen.generator.SentenceGenerator;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
-import com.motifgen.scoring.MidiExporter;
-import com.motifgen.scoring.MusicXMLExporter;
 import com.motifgen.scoring.SentenceScorer;
 import com.motifgen.theory.KeyDetector;
 

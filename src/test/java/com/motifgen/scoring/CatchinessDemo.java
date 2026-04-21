@@ -1,5 +1,6 @@
 package com.motifgen.scoring;
 
+import com.motifgen.exporter.MidiExporter;
 import com.motifgen.generator.SentenceGenerator;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;

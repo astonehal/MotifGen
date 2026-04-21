@@ -6,3 +6,5 @@ build/
 .idea/
 *.iml
 .vscode/
+.claude/
+output/
