@@ -1,118 +1,154 @@
 package com.motifgen.generator;
 
+import com.motifgen.generator.catchy.AnnealingRefiner;
+import com.motifgen.generator.catchy.BeamSearcher;
+import com.motifgen.generator.catchy.ClimaxPlacer;
+import com.motifgen.generator.catchy.SectionGoal;
+import com.motifgen.generator.catchy.StructuralPlan;
+import com.motifgen.generator.catchy.StructuralPlanner;
 import com.motifgen.model.Motif;
+import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
+import com.motifgen.scoring.SentenceScorer;
 import com.motifgen.theory.KeyDetector;
 import com.motifgen.theory.KeySignature;
-import com.motifgen.transform.MotifTransformer;
-
 import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 
 /**
- * Generates 16-bar musical sentences from a 4-bar motif.
+ * Generates 16-bar musical sentences from a 4-bar motif using a score-guided
+ * pipeline: structural plan → per-phrase beam search → climax placement →
+ * simulated annealing refinement.
  *
- * Sentence structures used:
- *   - "a a' b a''"  (statement, varied repeat, contrast, return with cadence)
- *   - "a b a' c"    (alternating with two contrasts)
- *   - "a a' a'' b"  (progressive development to climax)
- *   - "a b c a'"    (exploration and return)
- *
- * Each structure is generated in multiple related keys to provide variety.
+ * <p>For each related key and each supported template, the pipeline is run
+ * across a small number of random seeds and the highest-scoring run is kept.
+ * The returned list is sorted best-first so the CLI can pick a top pair.
  */
 public class SentenceGenerator {
 
-    private final MotifTransformer transformer;
+  private static final int BEAM_WIDTH = 16;
+  private static final int REFINEMENT_ITERATIONS = 30;
+  private static final int SEEDS_PER_COMBO = 3;
+  private static final String[] TEMPLATES = {"AABA", "ABAB", "ABAC", "ABCA"};
 
-    public SentenceGenerator(long seed) {
-        this.transformer = new MotifTransformer(seed);
-    }
+  private final long rootSeed;
+  private final StructuralPlanner planner = new StructuralPlanner();
+  private final ClimaxPlacer climaxPlacer = new ClimaxPlacer();
+  private final SentenceScorer scorer = new SentenceScorer();
 
-    public SentenceGenerator() {
-        this.transformer = new MotifTransformer();
-    }
+  public SentenceGenerator(long seed) {
+    this.rootSeed = seed;
+  }
 
-    /**
-     * Generate multiple sentence candidates from a motif.
-     * Produces sentences in the detected key and related keys, using various structures.
-     */
-    public List<Sentence> generate(Motif motif) {
-        KeySignature detectedKey = KeyDetector.bestKey(motif);
-        List<KeySignature> keys = detectedKey.relatedKeys();
+  public SentenceGenerator() {
+    this(System.nanoTime());
+  }
 
-        System.out.println("  Detected key: " + detectedKey.name());
-        System.out.println("  Exploring keys: " + keys.stream().map(KeySignature::name).toList());
+  public List<Sentence> generate(Motif motif) {
+    KeySignature detectedKey = KeyDetector.bestKey(motif);
+    List<KeySignature> keys = detectedKey.relatedKeys();
 
-        List<Sentence> candidates = new ArrayList<>();
+    System.out.println("  Detected key: " + detectedKey.name());
+    System.out.println("  Exploring keys: " + keys.stream().map(KeySignature::name).toList());
 
-        for (KeySignature key : keys) {
-            int transposition = key.root() - detectedKey.root();
-            Motif baseMotif = transposition == 0 ? motif : motif.transpose(transposition);
+    List<Sentence> candidates = new ArrayList<>();
+    long comboSeed = rootSeed;
 
-            candidates.add(generateAABAStructure(baseMotif, key));
-            candidates.add(generateABACStructure(baseMotif, key));
-            candidates.add(generateProgressiveStructure(baseMotif, key));
-            candidates.add(generateExploratoryStructure(baseMotif, key));
+    for (KeySignature key : keys) {
+      int transposition = key.root() - detectedKey.root();
+      Motif baseMotif = transposition == 0 ? motif : motif.transpose(transposition);
+      for (String template : TEMPLATES) {
+        Sentence best = null;
+        for (int s = 0; s < SEEDS_PER_COMBO; s++) {
+          long runSeed = comboSeed + s * 31L;
+          Sentence produced = scorer.score(runPipeline(baseMotif, key, template, runSeed));
+          if (best == null || produced.getScore() > best.getScore()) {
+            best = produced;
+          }
         }
-
-        return candidates;
+        candidates.add(best);
+        comboSeed += 1009L;
+      }
     }
 
-    /**
-     * a a' b a'' — Classic sentence: statement, variation, contrast, cadential return.
-     */
-    private Sentence generateAABAStructure(Motif motif, KeySignature key) {
-        Motif a = motif;                                         // original statement
-        Motif aPrime = transformer.vary(motif, key);             // slight variation
-        Motif b = transformer.buildClimax(                        // contrasting phrase (climax)
-                transformer.sequence(motif, 3, key), key);
-        Motif aDoublePrime = transformer.createCadence(motif, key); // return with cadence
+    candidates.sort(Comparator.comparingDouble(Sentence::getScore).reversed());
+    return candidates;
+  }
 
-        return new Sentence(List.of(a, aPrime, b, aDoublePrime), "a a' b a''", key.name(), 0);
+  private Sentence runPipeline(Motif motif, KeySignature key, String template, long seed) {
+    StructuralPlan plan = planner.plan(motif, template, key);
+
+    BeamSearcher searcher = new BeamSearcher(seed, BEAM_WIDTH);
+    List<Motif> phrases = new ArrayList<>();
+    int sections = plan.sectionCount();
+    for (int i = 0; i < sections; i++) {
+      char sectionChar = template.charAt(i);
+      SectionGoal goal = goalFor(sectionChar, i == sections - 1);
+      Motif phrase = searcher.search(motif, goal, List.copyOf(phrases), key,
+          plan.notesPerPhrase(), motif.getTicksPerBeat(), motif.getBeatsPerBar());
+      phrase = phrase.withBars(plan.phraseBars());
+      phrases.add(phrase);
     }
 
-    /**
-     * a b a' c — Alternating structure with two different contrasts.
-     */
-    private Sentence generateABACStructure(Motif motif, KeySignature key) {
-        Motif a = motif;
-        Motif b = transformer.sequence(motif, 4, key);           // sequence up a 3rd
-        Motif aPrime = transformer.embellish(motif, key);         // embellished return
-        Motif c = transformer.createCadence(                      // cadential phrase from inversion
-                transformer.invert(motif, avgPitch(motif)), key);
+    Motif climaxed = applyClimax(phrases, plan, key);
+    List<Motif> shapedPhrases = splitByPhrase(climaxed, phrases);
 
-        return new Sentence(List.of(a, b, aPrime, c), "a b a' c", key.name(), 0);
+    Sentence assembled = new Sentence(shapedPhrases, structureStringFor(template),
+        key.name(), 0);
+
+    AnnealingRefiner refiner = new AnnealingRefiner(seed ^ 0xA11CE, REFINEMENT_ITERATIONS);
+    return refiner.refine(assembled, motif, key);
+  }
+
+  private Motif applyClimax(List<Motif> phrases, StructuralPlan plan, KeySignature key) {
+    List<Note> all = new ArrayList<>();
+    long offset = 0;
+    for (Motif phrase : phrases) {
+      for (Note n : phrase.getNotes()) {
+        all.add(n.withStartTick(n.startTick() + offset));
+      }
+      offset += phrase.totalTicks();
     }
+    Motif combined = new Motif(all, plan.totalBars(),
+        phrases.get(0).getBeatsPerBar(), phrases.get(0).getTicksPerBeat());
+    return climaxPlacer.enforceClimax(combined, plan.climaxPosition(), key);
+  }
 
-    /**
-     * a a' a'' b — Progressive development building to a climax then resolution.
-     */
-    private Sentence generateProgressiveStructure(Motif motif, KeySignature key) {
-        Motif a = motif;
-        Motif aPrime = transformer.embellish(motif, key);         // first development
-        Motif aDoublePrime = transformer.buildClimax(motif, key); // climax
-        Motif b = transformer.createCadence(                      // resolution/cadence
-                transformer.vary(motif, key), key);
-
-        return new Sentence(List.of(a, aPrime, aDoublePrime, b), "a a' a'' b", key.name(), 0);
+  private List<Motif> splitByPhrase(Motif combined, List<Motif> originalPhrases) {
+    List<Motif> split = new ArrayList<>();
+    int cursor = 0;
+    List<Note> all = combined.getNotes();
+    for (Motif original : originalPhrases) {
+      int count = original.getNotes().size();
+      List<Note> slice = new ArrayList<>();
+      long baseOffset = (long) split.size() * original.totalTicks();
+      for (int i = 0; i < count && cursor < all.size(); i++) {
+        Note n = all.get(cursor++);
+        slice.add(n.withStartTick(n.startTick() - baseOffset));
+      }
+      split.add(new Motif(slice, original.getBars(),
+          original.getBeatsPerBar(), original.getTicksPerBeat()));
     }
+    return split;
+  }
 
-    /**
-     * a b c a' — Exploration: statement, two contrasts, then return.
-     */
-    private Sentence generateExploratoryStructure(Motif motif, KeySignature key) {
-        Motif a = motif;
-        Motif b = transformer.retrograde(motif);                  // retrograde contrast
-        Motif c = transformer.fragment(motif, key);               // fragmentation development
-        Motif aPrime = transformer.createCadence(motif, key);     // cadential return
+  private static SectionGoal goalFor(char section, boolean isFinal) {
+    if (isFinal) return SectionGoal.RESOLVE_TO_TONIC;
+    return section == 'A' ? SectionGoal.REINFORCE_MOTIF : SectionGoal.PROVIDE_CONTRAST;
+  }
 
-        return new Sentence(List.of(a, b, c, aPrime), "a b c a'", key.name(), 0);
+  private static String structureStringFor(String template) {
+    StringBuilder sb = new StringBuilder();
+    int[] seen = new int[26];
+    for (int i = 0; i < template.length(); i++) {
+      if (i > 0) sb.append(' ');
+      char c = template.charAt(i);
+      char lower = Character.toLowerCase(c);
+      sb.append(lower);
+      int count = seen[c - 'A']++;
+      for (int j = 0; j < count; j++) sb.append('\'');
     }
-
-    private int avgPitch(Motif motif) {
-        return (int) motif.pitches().stream()
-                .mapToInt(Integer::intValue)
-                .average()
-                .orElse(60);
-    }
+    return sb.toString();
+  }
 }
