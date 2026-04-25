@@ -105,7 +105,46 @@ public class SentenceGenerator {
         key.name(), 0);
 
     AnnealingRefiner refiner = new AnnealingRefiner(seed ^ 0xA11CE, REFINEMENT_ITERATIONS);
-    return refiner.refine(assembled, motif, key, immutableIndices);
+    Sentence refined = refiner.refine(assembled, motif, key, immutableIndices);
+    int finalPhraseIdx = refined.getPhrases().size() - 1;
+    if (!immutableIndices.contains(finalPhraseIdx)) {
+      refined = forceFinalNoteToTonic(refined, key, finalPhraseIdx);
+    }
+    return refined;
+  }
+
+  private static Sentence forceFinalNoteToTonic(Sentence sentence, KeySignature key,
+      int phraseIdx) {
+    List<Motif> phrases = new ArrayList<>(sentence.getPhrases());
+    Motif phrase = phrases.get(phraseIdx);
+    List<Note> notes = new ArrayList<>(phrase.getNotes());
+
+    int lastIdx = -1;
+    for (int i = notes.size() - 1; i >= 0; i--) {
+      if (!notes.get(i).isRest()) {
+        lastIdx = i;
+        break;
+      }
+    }
+    if (lastIdx < 0) return sentence;
+
+    Note last = notes.get(lastIdx);
+    int currentPc = ((last.pitch() % 12) + 12) % 12;
+    if (currentPc == key.root()) return sentence;
+
+    int octaveStart = (last.pitch() / 12) * 12;
+    int candidate = octaveStart + key.root();
+    int up = candidate >= last.pitch() ? candidate : candidate + 12;
+    int down = candidate <= last.pitch() ? candidate : candidate - 12;
+    int chosen = Math.abs(up - last.pitch()) <= Math.abs(last.pitch() - down) ? up : down;
+    chosen = Math.max(0, Math.min(127, chosen));
+
+    notes.set(lastIdx, new Note(chosen, last.startTick(),
+        last.durationTicks(), last.velocity()));
+    phrases.set(phraseIdx, new Motif(notes, phrase.getBars(),
+        phrase.getBeatsPerBar(), phrase.getTicksPerBeat()));
+    return new Sentence(phrases, sentence.getStructure(), sentence.getKeyName(),
+        sentence.getScore());
   }
 
   private static int phraseIndexForClimax(int climaxPosition, List<Motif> phrases) {
