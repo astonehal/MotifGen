@@ -19,12 +19,15 @@ import java.util.*;
  */
 public class SentenceScorer {
 
-  private static final double WEIGHT_REPETITION = 0.25;
-  private static final double WEIGHT_CONTOUR = 0.15;
-  private static final double WEIGHT_COMPACTNESS = 0.15;
-  private static final double WEIGHT_RHYTHM = 0.15;
-  private static final double WEIGHT_CONVENTIONALITY = 0.15;
-  private static final double WEIGHT_HOOK = 0.15;
+  private static final double WEIGHT_REPETITION = 0.22;
+  private static final double WEIGHT_CONTOUR = 0.136;
+  private static final double WEIGHT_COMPACTNESS = 0.136;
+  private static final double WEIGHT_RHYTHM = 0.136;
+  private static final double WEIGHT_CONVENTIONALITY = 0.136;
+  private static final double WEIGHT_HOOK = 0.136;
+  private static final double WEIGHT_RHYTHM_VARIETY = 0.10;
+
+  private static final double VARIETY_TOLERANCE = 0.75;
 
   public record ScoreBreakdown(
       double repetition,
@@ -33,6 +36,7 @@ public class SentenceScorer {
       double rhythmicSimplicity,
       double internalConventionality,
       double hookProminence,
+      double rhythmicVariety,
       double total
   ) {}
 
@@ -61,7 +65,7 @@ public class SentenceScorer {
     List<Note> notes = sentence.getAllNotes();
     List<Note> pitched = notes.stream().filter(n -> !n.isRest()).toList();
     if (pitched.isEmpty()) {
-      return new ScoreBreakdown(0, 0, 0, 0, 0, 0, 0);
+      return new ScoreBreakdown(0, 0, 0, 0, 0, 0, 0, 0);
     }
 
     double repetition = scoreRepetition(sentence.getPhrases(), pitched);
@@ -70,16 +74,41 @@ public class SentenceScorer {
     double rhythm = scoreRhythmicSimplicity(notes, sentence);
     double conventionality = scoreInternalConventionality(pitched);
     double hook = scoreHookProminence(pitched);
+    double rhythmVariety = scoreRhythmicVariety(pitched);
 
     double total = (repetition * WEIGHT_REPETITION
         + contour * WEIGHT_CONTOUR
         + compactness * WEIGHT_COMPACTNESS
         + rhythm * WEIGHT_RHYTHM
         + conventionality * WEIGHT_CONVENTIONALITY
-        + hook * WEIGHT_HOOK) * 100;
+        + hook * WEIGHT_HOOK
+        + rhythmVariety * WEIGHT_RHYTHM_VARIETY) * 100;
 
     return new ScoreBreakdown(repetition, contour, compactness, rhythm,
-        conventionality, hook, total);
+        conventionality, hook, rhythmVariety, total);
+  }
+
+  /**
+   * Rewards rhythmic variety: returns 1.0 when at least two distinct quantised
+   * durations are present and no single duration covers more than
+   * {@link #VARIETY_TOLERANCE} of the sounding notes; 0.0 when all durations
+   * are identical; smooth falloff between.
+   */
+  private double scoreRhythmicVariety(List<Note> sounding) {
+    if (sounding.size() < 2) return 0.0;
+
+    Map<Long, Integer> counts = new HashMap<>();
+    for (Note n : sounding) {
+      long quantized = Math.max(1, (n.durationTicks() / 60) * 60);
+      counts.merge(quantized, 1, Integer::sum);
+    }
+    if (counts.size() <= 1) return 0.0;
+
+    int max = counts.values().stream().mapToInt(Integer::intValue).max().orElse(0);
+    double modalShare = (double) max / sounding.size();
+    if (modalShare <= VARIETY_TOLERANCE) return 1.0;
+
+    return clamp(1.0 - (modalShare - VARIETY_TOLERANCE) / (1.0 - VARIETY_TOLERANCE));
   }
 
   /**

@@ -63,7 +63,7 @@ class SentenceScorerTest {
   }
 
   @Test
-  void breakdownHasSixFactorsAndTotal() {
+  void breakdownHasSevenFactorsAndTotal() {
     int[] pitches = {60, 62, 64, 65, 67, 65, 64, 62,
         60, 62, 64, 65, 67, 65, 64, 60};
     Motif m = makeMotif(pitches);
@@ -77,6 +77,7 @@ class SentenceScorerTest {
     assertTrue(bd.rhythmicSimplicity() >= 0 && bd.rhythmicSimplicity() <= 1);
     assertTrue(bd.internalConventionality() >= 0 && bd.internalConventionality() <= 1);
     assertTrue(bd.hookProminence() >= 0 && bd.hookProminence() <= 1);
+    assertTrue(bd.rhythmicVariety() >= 0 && bd.rhythmicVariety() <= 1);
     assertTrue(bd.total() >= 0 && bd.total() <= 100);
   }
 
@@ -255,15 +256,67 @@ class SentenceScorerTest {
 
     SentenceScorer.ScoreBreakdown bd = scorer.breakdown(sentence);
 
-    double expectedTotal = (bd.repetition() * 0.25
-        + bd.contourPredictability() * 0.15
-        + bd.pitchRangeCompactness() * 0.15
-        + bd.rhythmicSimplicity() * 0.15
-        + bd.internalConventionality() * 0.15
-        + bd.hookProminence() * 0.15) * 100;
+    double expectedTotal = (bd.repetition() * 0.22
+        + bd.contourPredictability() * 0.136
+        + bd.pitchRangeCompactness() * 0.136
+        + bd.rhythmicSimplicity() * 0.136
+        + bd.internalConventionality() * 0.136
+        + bd.hookProminence() * 0.136
+        + bd.rhythmicVariety() * 0.10) * 100;
 
     assertEquals(expectedTotal, bd.total(), 0.01,
         "Total should be weighted sum × 100");
+  }
+
+  // --- Rhythmic variety tests ---
+
+  @Test
+  void uniformRhythmScoresZeroOnVariety() {
+    int[] pitches = {60, 62, 64, 65, 67, 65, 64, 62,
+        60, 62, 64, 65, 67, 65, 64, 60};
+    Motif m = makeMotif(pitches); // all quarter notes
+    Sentence sentence = makeSentence(m, m, m, m);
+
+    SentenceScorer.ScoreBreakdown bd = scorer.breakdown(sentence);
+
+    assertEquals(0.0, bd.rhythmicVariety(), 1e-6,
+        "All identical durations should score 0 on rhythm variety");
+  }
+
+  @Test
+  void mixedRhythmScoresHighOnVariety() {
+    long q = TICKS_PER_BEAT;
+    long e = q / 2;
+    long h = q * 2;
+    long[] durations = {q, e, q, h, e, q, h, e, q, e, h, q, e, q, h, q};
+    int[] pitches = {60, 62, 64, 65, 67, 65, 64, 62,
+        60, 62, 64, 65, 67, 65, 64, 60};
+    Motif m = makeMotif(pitches, durations);
+    Sentence sentence = makeSentence(m, m, m, m);
+
+    SentenceScorer.ScoreBreakdown bd = scorer.breakdown(sentence);
+
+    assertTrue(bd.rhythmicVariety() >= 0.9,
+        "Well-mixed rhythm with no duration > 75% should score >= 0.9, got: "
+            + bd.rhythmicVariety());
+  }
+
+  @Test
+  void mostlyOneDurationScoresLowerOnVariety() {
+    long q = TICKS_PER_BEAT;
+    long h = q * 2;
+    // 15 quarters and 1 half: modal share = 15/16 = 0.9375 (above 0.75 threshold)
+    long[] durations = {q, q, q, q, q, q, q, q, q, q, q, q, q, q, q, h};
+    int[] pitches = {60, 62, 64, 65, 67, 65, 64, 62,
+        60, 62, 64, 65, 67, 65, 64, 60};
+    Motif m = makeMotif(pitches, durations);
+    Sentence sentence = makeSentence(m, m, m, m);
+
+    SentenceScorer.ScoreBreakdown bd = scorer.breakdown(sentence);
+
+    assertTrue(bd.rhythmicVariety() < 0.5,
+        "When 93% of notes share one duration, variety should be < 0.5, got: "
+            + bd.rhythmicVariety());
   }
 
   // --- scoreAndRank test ---

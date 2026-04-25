@@ -6,10 +6,12 @@ import com.motifgen.model.Sentence;
 import com.motifgen.scoring.SentenceScorer;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Random;
+import java.util.Set;
 
 /**
  * Simulated-annealing refiner that nudges a generated sentence toward a higher
@@ -41,15 +43,28 @@ public final class AnnealingRefiner {
   }
 
   public Sentence refine(Sentence initial, Motif seedMotif, KeySignature key) {
+    return refine(initial, seedMotif, key, Collections.emptySet());
+  }
+
+  public Sentence refine(Sentence initial, Motif seedMotif, KeySignature key,
+      Set<Integer> immutableIndices) {
     Random rng = new Random(seed);
+
+    List<Integer> mutableIndices = new ArrayList<>();
+    for (int i = 0; i < initial.getPhrases().size(); i++) {
+      if (!immutableIndices.contains(i)) mutableIndices.add(i);
+    }
 
     Sentence current = scorer.score(initial);
     Sentence best = current;
+    if (mutableIndices.isEmpty()) {
+      return best;
+    }
     double temperature = INITIAL_TEMPERATURE;
 
     for (int i = 0; i < maxIterations; i++) {
       Weakest weakest = identifyWeakest(scorer.breakdown(current));
-      Sentence candidate = scorer.score(mutate(current, weakest, key, rng));
+      Sentence candidate = scorer.score(mutate(current, weakest, key, rng, mutableIndices));
 
       double delta = candidate.getScore() - current.getScore();
       if (delta > 0 || rng.nextDouble() < Math.exp(delta / Math.max(1e-6, temperature))) {
@@ -64,9 +79,10 @@ public final class AnnealingRefiner {
     return best;
   }
 
-  private Sentence mutate(Sentence sentence, Weakest weakest, KeySignature key, Random rng) {
+  private Sentence mutate(Sentence sentence, Weakest weakest, KeySignature key,
+      Random rng, List<Integer> mutableIndices) {
     List<Motif> phrases = new ArrayList<>(sentence.getPhrases());
-    int phraseIdx = rng.nextInt(phrases.size());
+    int phraseIdx = mutableIndices.get(rng.nextInt(mutableIndices.size()));
     Motif phrase = phrases.get(phraseIdx);
     List<Note> notes = new ArrayList<>(phrase.getNotes());
     List<Integer> soundingIdx = new ArrayList<>();
@@ -141,17 +157,53 @@ public final class AnnealingRefiner {
   }
 
   private void applyRhythmMutation(List<Note> notes, List<Integer> soundingIdx, Random rng) {
+    long ticksPerBeat = inferTicksPerBeat(notes, soundingIdx);
+    long quarter = Math.max(1L, ticksPerBeat);
+    long eighth = Math.max(1L, ticksPerBeat / 2L);
+    long half = ticksPerBeat * 2L;
+    long[] palette = {eighth, quarter, half};
+
     Map<Long, Integer> counts = new HashMap<>();
     for (int idx : soundingIdx) {
       counts.merge(notes.get(idx).durationTicks(), 1, Integer::sum);
     }
     long modal = counts.entrySet().stream()
-        .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(0L);
+        .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(quarter);
+
+    long target = palette[0];
+    int targetCount = Integer.MAX_VALUE;
+    for (long candidate : palette) {
+      if (candidate == modal) continue;
+      int c = counts.getOrDefault(candidate, 0);
+      if (c < targetCount) {
+        targetCount = c;
+        target = candidate;
+      }
+    }
+
     int pick = soundingIdx.get(rng.nextInt(soundingIdx.size()));
     Note n = notes.get(pick);
-    if (n.durationTicks() != modal) {
-      notes.set(pick, new Note(n.pitch(), n.startTick(), modal, n.velocity()));
+    if (n.durationTicks() != target) {
+      notes.set(pick, new Note(n.pitch(), n.startTick(), target, n.velocity()));
     }
+  }
+
+  private static long inferTicksPerBeat(List<Note> notes, List<Integer> soundingIdx) {
+    if (soundingIdx.isEmpty()) return 480L;
+    long sum = 0L;
+    for (int idx : soundingIdx) sum += notes.get(idx).durationTicks();
+    long avg = Math.max(1L, sum / soundingIdx.size());
+    long[] candidates = {120L, 240L, 480L, 960L};
+    long best = 480L;
+    long bestDiff = Long.MAX_VALUE;
+    for (long c : candidates) {
+      long diff = Math.abs(c - avg);
+      if (diff < bestDiff) {
+        bestDiff = diff;
+        best = c;
+      }
+    }
+    return best;
   }
 
   private void applyConventionalityMutation(List<Note> notes, List<Integer> soundingIdx,
@@ -216,9 +268,11 @@ public final class AnnealingRefiner {
   private static Weakest identifyWeakest(SentenceScorer.ScoreBreakdown bd) {
     double[] factors = {bd.repetition(), bd.contourPredictability(),
         bd.pitchRangeCompactness(), bd.rhythmicSimplicity(),
-        bd.internalConventionality(), bd.hookProminence()};
+        bd.internalConventionality(), bd.hookProminence(),
+        bd.rhythmicVariety()};
     Weakest[] names = {Weakest.REPETITION, Weakest.CONTOUR, Weakest.COMPACTNESS,
-        Weakest.RHYTHM, Weakest.CONVENTIONALITY, Weakest.HOOK};
+        Weakest.RHYTHM, Weakest.CONVENTIONALITY, Weakest.HOOK,
+        Weakest.RHYTHM};
     int worst = 0;
     for (int i = 1; i < factors.length; i++) {
       if (factors[i] < factors[worst]) worst = i;
