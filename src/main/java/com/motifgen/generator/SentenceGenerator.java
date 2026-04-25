@@ -1,9 +1,8 @@
 package com.motifgen.generator;
 
 import com.motifgen.generator.catchy.AnnealingRefiner;
-import com.motifgen.generator.catchy.BeamSearcher;
 import com.motifgen.generator.catchy.ClimaxPlacer;
-import com.motifgen.generator.catchy.SectionGoal;
+import com.motifgen.generator.catchy.PhraseSeeder;
 import com.motifgen.generator.catchy.StructuralPlan;
 import com.motifgen.generator.catchy.StructuralPlanner;
 import com.motifgen.model.Motif;
@@ -14,20 +13,24 @@ import com.motifgen.theory.KeyDetector;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
- * Generates 16-bar musical sentences from a 4-bar motif using a score-guided
- * pipeline: structural plan → per-phrase beam search → climax placement →
- * simulated annealing refinement.
+ * Generates 16-bar musical sentences from a 4-bar motif by seeding each phrase
+ * from the input motif (via {@link PhraseSeeder}) and refining the result with
+ * simulated annealing. {@code 'A'} sections are kept as exact copies of the
+ * motif; {@code 'B'} and {@code 'C'} sections are transformed (transpose,
+ * invert, retrograde) and then nudged by the annealer toward higher
+ * catchiness scores.
  *
  * <p>For each related key and each supported template, the pipeline is run
  * across a small number of random seeds and the highest-scoring run is kept.
- * The returned list is sorted best-first so the CLI can pick a top pair.
+ * The returned list is sorted best-first.
  */
 public class SentenceGenerator {
 
-  private static final int BEAM_WIDTH = 16;
   private static final int REFINEMENT_ITERATIONS = 30;
   private static final int SEEDS_PER_COMBO = 3;
   private static final String[] TEMPLATES = {"AABA", "ABAB", "ABAC", "ABCA"};
@@ -79,26 +82,41 @@ public class SentenceGenerator {
   private Sentence runPipeline(Motif motif, KeySignature key, String template, long seed) {
     StructuralPlan plan = planner.plan(motif, template, key);
 
-    BeamSearcher searcher = new BeamSearcher(seed, BEAM_WIDTH);
+    PhraseSeeder seeder = new PhraseSeeder(seed);
     List<Motif> phrases = new ArrayList<>();
+    Set<Integer> immutableIndices = new HashSet<>();
     int sections = plan.sectionCount();
     for (int i = 0; i < sections; i++) {
-      char sectionChar = template.charAt(i);
-      SectionGoal goal = goalFor(sectionChar, i == sections - 1);
-      Motif phrase = searcher.search(motif, goal, List.copyOf(phrases), key,
-          plan.notesPerPhrase(), motif.getTicksPerBeat(), motif.getBeatsPerBar());
-      phrase = phrase.withBars(plan.phraseBars());
+      char role = template.charAt(i);
+      boolean isFinal = i == sections - 1;
+      PhraseSeeder.SeededPhrase seeded = seeder.seed(role, isFinal, motif, key);
+      Motif phrase = seeded.phrase().withBars(plan.phraseBars());
       phrases.add(phrase);
+      if (seeded.immutable()) immutableIndices.add(i);
     }
 
-    Motif climaxed = applyClimax(phrases, plan, key);
-    List<Motif> shapedPhrases = splitByPhrase(climaxed, phrases);
+    int climaxPhraseIdx = phraseIndexForClimax(plan.climaxPosition(), phrases);
+    if (climaxPhraseIdx >= 0 && !immutableIndices.contains(climaxPhraseIdx)) {
+      Motif climaxed = applyClimax(phrases, plan, key);
+      phrases = splitByPhrase(climaxed, phrases);
+    }
 
-    Sentence assembled = new Sentence(shapedPhrases, structureStringFor(template),
+    Sentence assembled = new Sentence(phrases, structureStringFor(template),
         key.name(), 0);
 
     AnnealingRefiner refiner = new AnnealingRefiner(seed ^ 0xA11CE, REFINEMENT_ITERATIONS);
-    return refiner.refine(assembled, motif, key);
+    return refiner.refine(assembled, motif, key, immutableIndices);
+  }
+
+  private static int phraseIndexForClimax(int climaxPosition, List<Motif> phrases) {
+    int running = 0;
+    for (int i = 0; i < phrases.size(); i++) {
+      int sounding = (int) phrases.get(i).getNotes().stream()
+          .filter(n -> !n.isRest()).count();
+      if (climaxPosition < running + sounding) return i;
+      running += sounding;
+    }
+    return -1;
   }
 
   private Motif applyClimax(List<Motif> phrases, StructuralPlan plan, KeySignature key) {
@@ -131,11 +149,6 @@ public class SentenceGenerator {
           original.getBeatsPerBar(), original.getTicksPerBeat()));
     }
     return split;
-  }
-
-  private static SectionGoal goalFor(char section, boolean isFinal) {
-    if (isFinal) return SectionGoal.RESOLVE_TO_TONIC;
-    return section == 'A' ? SectionGoal.REINFORCE_MOTIF : SectionGoal.PROVIDE_CONTRAST;
   }
 
   private static String structureStringFor(String template) {

@@ -129,12 +129,13 @@ class EndToEndTest {
         "Hook prominence out of range: " + bd.hookProminence());
 
     // Total should be weighted sum * 100
-    double expectedTotal = (bd.repetition() * 0.25
-        + bd.contourPredictability() * 0.15
-        + bd.pitchRangeCompactness() * 0.15
-        + bd.rhythmicSimplicity() * 0.15
-        + bd.internalConventionality() * 0.15
-        + bd.hookProminence() * 0.15) * 100;
+    double expectedTotal = (bd.repetition() * 0.22
+        + bd.contourPredictability() * 0.136
+        + bd.pitchRangeCompactness() * 0.136
+        + bd.rhythmicSimplicity() * 0.136
+        + bd.internalConventionality() * 0.136
+        + bd.hookProminence() * 0.136
+        + bd.rhythmicVariety() * 0.10) * 100;
     assertEquals(expectedTotal, bd.total(), 0.01);
   }
 

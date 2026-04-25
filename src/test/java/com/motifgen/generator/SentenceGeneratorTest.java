@@ -111,4 +111,30 @@ class SentenceGeneratorTest {
               + candidates.get(i - 1).getScore() + " vs " + candidates.get(i).getScore());
     }
   }
+
+  @Test
+  void everyAPhrasePreservesMotifIntervalPattern() {
+    SentenceGenerator gen = new SentenceGenerator(2024L);
+    Motif motif = cMajor4Bars();
+    List<Sentence> candidates = gen.generate(motif);
+
+    java.util.List<Integer> motifPitches = motif.getNotes().stream()
+        .map(Note::pitch).toList();
+
+    for (Sentence s : candidates) {
+      String[] roles = s.getStructure().split(" ");
+      java.util.List<Motif> phrases = s.getPhrases();
+      for (int p = 0; p < roles.length; p++) {
+        if (!roles[p].startsWith("a")) continue;
+        java.util.List<Integer> aPitches = phrases.get(p).getNotes().stream()
+            .map(Note::pitch).toList();
+        for (int i = 1; i < motifPitches.size(); i++) {
+          int motifInterval = motifPitches.get(i) - motifPitches.get(i - 1);
+          int aInterval = aPitches.get(i) - aPitches.get(i - 1);
+          assertEquals(motifInterval, aInterval,
+              "A phrase " + p + " of " + s + " breaks motif interval at idx " + i);
+        }
+      }
+    }
+  }
 }

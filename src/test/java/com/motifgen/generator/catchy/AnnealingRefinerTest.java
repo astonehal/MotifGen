@@ -94,4 +94,86 @@ class AnnealingRefinerTest {
 
     assertEquals(scorer.score(initial).getScore(), refined.getScore(), 1e-6);
   }
+
+  @Test
+  void immutablePhrasesAreNeverMutated() {
+    AnnealingRefiner refiner = new AnnealingRefiner(2024L, 50);
+    KeySignature cMajor = KeySignature.major(0);
+
+    int[] aPitches = {60, 62, 64, 65, 67, 65, 64, 62};
+    Motif aPhrase = phraseFromPitches(aPitches);
+
+    Sentence initial = new Sentence(
+        List.of(aPhrase,
+            phraseFromPitches(new int[] {72, 74, 76, 77, 79, 77, 76, 74}),
+            phraseFromPitches(new int[] {48, 50, 52, 53, 55, 53, 52, 50}),
+            aPhrase),
+        "a b c a", cMajor.name(), 0.0);
+
+    Sentence refined = refiner.refine(initial, aPhrase, cMajor,
+        java.util.Set.of(0, 3));
+
+    var refinedA0 = refined.getPhrases().get(0).getNotes();
+    var refinedA3 = refined.getPhrases().get(3).getNotes();
+    for (int i = 0; i < aPitches.length; i++) {
+      assertEquals(aPitches[i], refinedA0.get(i).pitch(),
+          "immutable phrase 0 must remain identical at index " + i);
+      assertEquals(aPitches[i], refinedA3.get(i).pitch(),
+          "immutable phrase 3 must remain identical at index " + i);
+    }
+  }
+
+  @Test
+  void allPhrasesImmutableProducesAnIdenticalSentence() {
+    AnnealingRefiner refiner = new AnnealingRefiner(7L, 20);
+    KeySignature cMajor = KeySignature.major(0);
+    Motif seed = phraseFromPitches(new int[] {60, 62, 64, 65, 67, 65, 64, 62});
+
+    Sentence initial = fourPhraseSentence(
+        new int[] {60, 62, 64, 65, 67, 65, 64, 62},
+        new int[] {62, 64, 65, 67, 69, 67, 65, 64},
+        new int[] {64, 65, 67, 69, 71, 69, 67, 65},
+        new int[] {60, 62, 64, 65, 67, 65, 64, 62},
+        cMajor);
+
+    Sentence refined = refiner.refine(initial, seed, cMajor,
+        java.util.Set.of(0, 1, 2, 3));
+
+    for (int p = 0; p < 4; p++) {
+      var origNotes = initial.getPhrases().get(p).getNotes();
+      var newNotes = refined.getPhrases().get(p).getNotes();
+      assertEquals(origNotes.size(), newNotes.size());
+      for (int i = 0; i < origNotes.size(); i++) {
+        assertEquals(origNotes.get(i).pitch(), newNotes.get(i).pitch());
+      }
+    }
+  }
+
+  @Test
+  void rhythmMutationFavoursVarietyNotUniformity() {
+    AnnealingRefiner refiner = new AnnealingRefiner(2024L, 200);
+    KeySignature cMajor = KeySignature.major(0);
+
+    Motif seed = phraseFromPitches(new int[] {60, 62, 64, 65, 67, 65, 64, 62});
+    // All four phrases use uniform quarter notes; expect refinement to
+    // introduce at least one off-modal duration somewhere.
+    Sentence initial = fourPhraseSentence(
+        new int[] {60, 62, 64, 65, 67, 65, 64, 62},
+        new int[] {64, 62, 60, 62, 64, 65, 67, 65},
+        new int[] {62, 60, 62, 64, 65, 67, 65, 64},
+        new int[] {60, 62, 64, 65, 67, 65, 64, 62},
+        cMajor);
+
+    Sentence refined = refiner.refine(initial, seed, cMajor);
+
+    java.util.Set<Long> distinctDurations = new java.util.HashSet<>();
+    for (Motif phrase : refined.getPhrases()) {
+      for (Note n : phrase.getNotes()) {
+        if (!n.isRest()) distinctDurations.add(n.durationTicks());
+      }
+    }
+    assertTrue(distinctDurations.size() >= 2,
+        "Refiner should introduce rhythmic variety, got durations: "
+            + distinctDurations);
+  }
 }
