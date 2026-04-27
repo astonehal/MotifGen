@@ -29,7 +29,6 @@ public final class MotifLengthMatcher {
   public static final long MIN_DURATION_TICKS = 120L;
 
   private static final int[][] A_CANDIDATE_PATTERNS = {
-      {0, 0, 0, 0},
       {0, 1, 2, 3},
       {0, 1, -1, 2},
       {0, 0, 1, 0},
