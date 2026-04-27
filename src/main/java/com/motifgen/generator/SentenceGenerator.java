@@ -2,6 +2,7 @@ package com.motifgen.generator;
 
 import com.motifgen.generator.catchy.AnnealingRefiner;
 import com.motifgen.generator.catchy.ClimaxPlacer;
+import com.motifgen.generator.catchy.MotifLengthMatcher;
 import com.motifgen.generator.catchy.PhraseSeeder;
 import com.motifgen.generator.catchy.StructuralPlan;
 import com.motifgen.generator.catchy.StructuralPlanner;
@@ -39,6 +40,7 @@ public class SentenceGenerator {
   private final StructuralPlanner planner = new StructuralPlanner();
   private final ClimaxPlacer climaxPlacer = new ClimaxPlacer();
   private final SentenceScorer scorer = new SentenceScorer();
+  private final MotifLengthMatcher lengthMatcher = new MotifLengthMatcher();
 
   public SentenceGenerator(long seed) {
     this.rootSeed = seed;
@@ -81,6 +83,9 @@ public class SentenceGenerator {
 
   private Sentence runPipeline(Motif motif, KeySignature key, String template, long seed) {
     StructuralPlan plan = planner.plan(motif, template, key);
+    long phraseTicks = (long) plan.phraseBars() * motif.getBeatsPerBar()
+        * motif.getTicksPerBeat();
+    Motif lengthMatched = lengthMatcher.match(motif, phraseTicks, key, seed);
 
     PhraseSeeder seeder = new PhraseSeeder(seed);
     List<Motif> phrases = new ArrayList<>();
@@ -89,7 +94,8 @@ public class SentenceGenerator {
     for (int i = 0; i < sections; i++) {
       char role = template.charAt(i);
       boolean isFinal = i == sections - 1;
-      PhraseSeeder.SeededPhrase seeded = seeder.seed(role, isFinal, motif, key);
+      PhraseSeeder.SeededPhrase seeded = seeder.seed(role, isFinal,
+          lengthMatched, key);
       Motif phrase = seeded.phrase().withBars(plan.phraseBars());
       phrases.add(phrase);
       if (seeded.immutable()) immutableIndices.add(i);
