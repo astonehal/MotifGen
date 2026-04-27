@@ -85,8 +85,10 @@ public final class MotifLengthMatcher {
     long cursor = 0L;
     int tileIdx = 0;
     while (cursor < phraseTicks) {
-      Motif tile = transformer.diatonicTranspose(tile0,
-          steps[tileIdx % steps.length], key);
+      int step = steps[tileIdx % steps.length];
+      Motif tile = step == 0
+          ? transformer.identity(tile0)
+          : transformer.diatonicTranspose(tile0, step, key);
       for (Note n : tile.getNotes()) {
         long start = cursor + n.startTick();
         if (start >= phraseTicks) break;
