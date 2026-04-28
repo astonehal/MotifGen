@@ -6,7 +6,10 @@ import com.motifgen.model.Sentence;
 import com.motifgen.scoring.SentenceScorer;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 /**
  * Adapts a motif's content duration to a phrase's target duration before any
@@ -22,6 +25,10 @@ import java.util.List;
  *       {@link #MIN_DURATION_TICKS}, fall back to keeping every Nth note (with
  *       the first and last sounding notes always preserved) and then scale.</li>
  * </ul>
+ *
+ * <p>For A-section extension, tiles 1+ additionally receive a random
+ * {@link MotifTransformer.Op} transform (after diatonic transposition) to
+ * reduce repetitiveness. Tile 0 is always the identity (no extra transform).
  */
 public final class MotifLengthMatcher {
 
@@ -35,8 +42,90 @@ public final class MotifLengthMatcher {
       {0, -1, 1, -2}
   };
 
+  /**
+   * Strategy that applies an additional transform to a tile during extension.
+   * Tile 0 always uses the identity; tiles 1+ delegate to this picker.
+   */
+  @FunctionalInterface
+  interface TileTransformPicker {
+    /**
+     * Returns a (possibly transformed) version of {@code tile}.
+     *
+     * @param tile the diatonic-transposed tile; never {@code null}
+     * @param key  the active key signature; never {@code null}
+     * @return the tile after any additional transformation
+     */
+    Motif pick(Motif tile, KeySignature key);
+  }
+
+  /**
+   * A {@link TileTransformPicker} that draws from a shuffle-without-consecutive-repeat
+   * pool of {@link MotifTransformer.Op} values backed by a seeded {@link Random}.
+   */
+  private static final class ShufflePicker implements TileTransformPicker {
+
+    private static final MotifTransformer.Op[] ALL_OPS = MotifTransformer.Op.values();
+
+    private final MotifTransformer transformer;
+    private final Random random;
+    private final List<MotifTransformer.Op> pool = new ArrayList<>();
+    private MotifTransformer.Op lastUsed = null;
+
+    ShufflePicker(MotifTransformer transformer, Random random) {
+      this.transformer = transformer;
+      this.random = random;
+    }
+
+    @Override
+    public Motif pick(Motif tile, KeySignature key) {
+      if (pool.isEmpty()) {
+        replenishPool();
+      }
+      MotifTransformer.Op op = pool.remove(pool.size() - 1);
+      lastUsed = op;
+      return transformer.apply(op, tile, key);
+    }
+
+    private void replenishPool() {
+      pool.addAll(Arrays.asList(ALL_OPS));
+      Collections.shuffle(pool, random);
+      // Avoid placing the last-used op at the tail (next-to-be-drawn position)
+      // to prevent consecutive identical transforms across pool boundaries.
+      if (lastUsed != null && !pool.isEmpty()
+          && pool.get(pool.size() - 1) == lastUsed && pool.size() > 1) {
+        Collections.swap(pool, pool.size() - 1, random.nextInt(pool.size() - 1));
+      }
+    }
+  }
+
   private final MotifTransformer transformer = new MotifTransformer();
   private final SentenceScorer scorer = new SentenceScorer();
+  private final TileTransformPicker tileTransformPicker;
+
+  /** Creates a matcher with a non-deterministic random transform picker for extension tiles. */
+  public MotifLengthMatcher() {
+    this(new Random());
+  }
+
+  /**
+   * Creates a matcher whose random tile-transform picker is seeded by {@code random}.
+   *
+   * @param random the {@link Random} instance used for op selection; must not be {@code null}
+   */
+  public MotifLengthMatcher(Random random) {
+    if (random == null) throw new IllegalArgumentException("random must not be null");
+    this.tileTransformPicker = new ShufflePicker(transformer, random);
+  }
+
+  /**
+   * Creates a matcher with a custom {@link TileTransformPicker}, primarily for testing.
+   *
+   * @param picker the picker to use for tiles 1+; must not be {@code null}
+   */
+  MotifLengthMatcher(TileTransformPicker picker) {
+    if (picker == null) throw new IllegalArgumentException("picker must not be null");
+    this.tileTransformPicker = picker;
+  }
 
   public record ContentSpan(long startTick, long endTick, long durationTicks) {}
 
@@ -52,6 +141,18 @@ public final class MotifLengthMatcher {
     return new ContentSpan(start, end, end - start);
   }
 
+  /**
+   * Matches {@code motif} to {@code phraseTicks} for an A-section phrase.
+   * When extension is required the best candidate pattern is chosen by score,
+   * and a seeded random transform picker is used so the same {@code seed}
+   * always produces the same output.
+   *
+   * @param motif       source motif; must not be {@code null}
+   * @param phraseTicks target duration in ticks; positive
+   * @param key         key context; must not be {@code null}
+   * @param seed        random seed for deterministic tile-transform selection
+   * @return the length-matched motif
+   */
   public Motif match(Motif motif, long phraseTicks, KeySignature key, long seed) {
     long content = span(motif).durationTicks();
     if (content == phraseTicks || content == 0L) return motif;
@@ -60,7 +161,9 @@ public final class MotifLengthMatcher {
     Motif best = null;
     double bestScore = Double.NEGATIVE_INFINITY;
     for (int[] pattern : A_CANDIDATE_PATTERNS) {
-      Motif candidate = extend(motif, phraseTicks, key, pattern);
+      // Each candidate gets its own seeded picker so scoring is deterministic.
+      MotifLengthMatcher seededMatcher = new MotifLengthMatcher(new Random(seed));
+      Motif candidate = seededMatcher.extend(motif, phraseTicks, key, pattern);
       Sentence mock = new Sentence(
           List.of(candidate, candidate, candidate, candidate),
           "a a a a", key.name(), 0.0);
@@ -85,9 +188,11 @@ public final class MotifLengthMatcher {
     int tileIdx = 0;
     while (cursor < phraseTicks) {
       int step = steps[tileIdx % steps.length];
-      Motif tile = step == 0
+      // Tile 0 is always identity (preserve the motif verbatim as the anchor tile).
+      Motif diatonicTile = step == 0
           ? transformer.identity(tile0)
           : transformer.diatonicTranspose(tile0, step, key);
+      Motif tile = tileIdx == 0 ? diatonicTile : tileTransformPicker.pick(diatonicTile, key);
       for (Note n : tile.getNotes()) {
         long start = cursor + n.startTick();
         if (start >= phraseTicks) break;

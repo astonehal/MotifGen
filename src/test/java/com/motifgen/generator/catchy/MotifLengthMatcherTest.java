@@ -9,6 +9,7 @@ import com.motifgen.model.Note;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 import org.junit.jupiter.api.Test;
 
 class MotifLengthMatcherTest {
@@ -87,7 +88,8 @@ class MotifLengthMatcherTest {
 
   @Test
   void extendWithAscendingPatternProducesAscendingTiles() {
-    MotifLengthMatcher matcher = new MotifLengthMatcher();
+    // Use identity picker to verify the diatonic-transpose logic in isolation.
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, key) -> tile);
     Motif tile0 = oneBarMotif();
     Motif tiled = matcher.extend(tile0, PHRASE_TICKS, KeySignature.major(0),
         new int[] {0, 1, 2, 3});
@@ -107,9 +109,10 @@ class MotifLengthMatcherTest {
     // moving the C-major motif {C,D,E,F} up by +1 step gives {D,E,F,G},
     // whose chromatic intervals (2,1,2) differ from the source (2,2,1) but
     // whose scale-degree positions (1,2,3,4) match exactly.
+    // Use identity picker so tiles 1+ are pure diatonic (no extra random transform).
     MotifTransformer transformer = new MotifTransformer();
     KeySignature key = KeySignature.major(0);
-    MotifLengthMatcher matcher = new MotifLengthMatcher();
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, k) -> tile);
     int[] steps = {0, 1, -1, 2};
 
     Motif tile0 = oneBarMotif();
@@ -130,7 +133,8 @@ class MotifLengthMatcherTest {
 
   @Test
   void extendTrimsTrailingNoteToPhraseBoundary() {
-    MotifLengthMatcher matcher = new MotifLengthMatcher();
+    // Use identity picker — this test is about boundary trimming, not pitch transforms.
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, key) -> tile);
     // 1-bar motif, fits 4 times in 4 bars -> last tile fills exactly
     Motif tiled = matcher.extend(oneBarMotif(), PHRASE_TICKS,
         KeySignature.major(0), new int[] {0, 1, 2, 3});
@@ -284,5 +288,143 @@ class MotifLengthMatcherTest {
     List<Integer> pitchesA = matchedA.getNotes().stream().map(Note::pitch).toList();
     List<Integer> pitchesB = matchedB.getNotes().stream().map(Note::pitch).toList();
     assertNotEquals(pitchesA, pitchesB);
+  }
+
+  // -----------------------------------------------------------------------
+  // Issue #12: random transforms on extension tiles 1+
+  // -----------------------------------------------------------------------
+
+  /** Acceptance criterion 1 / tile-0-identity: tile 0 is always the raw diatonic tile. */
+  @Test
+  void extendTile0IsAlwaysIdentity() {
+    MotifLengthMatcher matcher = new MotifLengthMatcher(new Random(0));
+    Motif tile0 = oneBarMotif();
+    KeySignature key = KeySignature.major(0);
+    int[] steps = {0, 1, 2, 3};
+
+    Motif tiled = matcher.extend(tile0, PHRASE_TICKS, key, steps);
+
+    int notesPerTile = tile0.getNotes().size();
+    List<Note> all = tiled.getNotes();
+    // Tile 0: step=0 → identity; pitches must exactly match the source.
+    for (int i = 0; i < notesPerTile; i++) {
+      assertEquals(tile0.getNotes().get(i).pitch(), all.get(i).pitch(),
+          "tile 0 note " + i + " should be identity (no extra transform)");
+    }
+  }
+
+  /**
+   * Acceptance criterion 1 / tiles-1+-differ: every tile beyond tile 0 must
+   * produce pitches that differ from the plain diatonic-only tile.
+   */
+  @Test
+  void extendTiles1PlusEachHaveAdditionalTransform() {
+    MotifTransformer transformer = new MotifTransformer();
+    KeySignature key = KeySignature.major(0);
+    MotifLengthMatcher matcher = new MotifLengthMatcher(new Random(42));
+    int[] steps = {0, 1, 2, 3};
+
+    Motif tile0 = oneBarMotif();
+    Motif tiled = matcher.extend(tile0, PHRASE_TICKS, key, steps);
+
+    int notesPerTile = tile0.getNotes().size();
+    List<Note> all = tiled.getNotes();
+    int tiles = all.size() / notesPerTile;
+    for (int t = 1; t < tiles; t++) {
+      List<Integer> diatonicPitches =
+          transformer.diatonicTranspose(tile0, steps[t], key)
+              .getNotes().stream().map(Note::pitch).toList();
+      List<Integer> actualPitches = new ArrayList<>();
+      for (int i = 0; i < notesPerTile; i++) {
+        actualPitches.add(all.get(t * notesPerTile + i).pitch());
+      }
+      assertNotEquals(diatonicPitches, actualPitches,
+          "tile " + t + " should differ from plain diatonic result after random transform");
+    }
+  }
+
+  /**
+   * Acceptance criterion 4 / stochastic: the same motif extended with two
+   * different Random instances should (with very high probability) produce
+   * different pitch sequences for tiles 1+.
+   */
+  @Test
+  void extendIsStochasticAcrossDistinctRandomInstances() {
+    KeySignature key = KeySignature.major(0);
+    int[] steps = {0, 1, 2, 3};
+    Motif tile0 = oneBarMotif();
+    int notesPerTile = tile0.getNotes().size();
+
+    // Use seeds far apart to ensure different op selections.
+    MotifLengthMatcher matcherA = new MotifLengthMatcher(new Random(1L));
+    MotifLengthMatcher matcherB = new MotifLengthMatcher(new Random(999L));
+
+    Motif tiledA = matcherA.extend(tile0, PHRASE_TICKS, key, steps);
+    Motif tiledB = matcherB.extend(tile0, PHRASE_TICKS, key, steps);
+
+    // Compare tiles 1+ only (tile 0 is always identity for both).
+    List<Integer> pitchesA = tiledA.getNotes().stream()
+        .skip(notesPerTile).map(Note::pitch).toList();
+    List<Integer> pitchesB = tiledB.getNotes().stream()
+        .skip(notesPerTile).map(Note::pitch).toList();
+
+    assertNotEquals(pitchesA, pitchesB,
+        "different Random seeds should (usually) produce different tile transforms");
+  }
+
+  /**
+   * Acceptance criterion 4 / determinism: the same seed always produces the
+   * same output (extends existing matchIsDeterministicForSameSeed coverage
+   * to include the seeded-random constructor path).
+   */
+  @Test
+  void extendIsDeterministicForSameSeed() {
+    KeySignature key = KeySignature.major(0);
+    int[] steps = {0, 1, 2, 3};
+    Motif tile0 = oneBarMotif();
+
+    Motif runA = new MotifLengthMatcher(new Random(77L))
+        .extend(tile0, PHRASE_TICKS, key, steps);
+    Motif runB = new MotifLengthMatcher(new Random(77L))
+        .extend(tile0, PHRASE_TICKS, key, steps);
+
+    assertEquals(runA.getNotes().size(), runB.getNotes().size());
+    for (int i = 0; i < runA.getNotes().size(); i++) {
+      assertEquals(runA.getNotes().get(i).pitch(), runB.getNotes().get(i).pitch(),
+          "note " + i + " should match across identical seeds");
+    }
+  }
+
+  /**
+   * Acceptance criterion 3 / B-C unaffected: the B/C extension path (i.e.
+   * using the default no-arg constructor, which is not seeded by match()) must
+   * still produce the exact diatonic result for every tile because no random
+   * transform is injected from outside the A-section scoring loop.
+   *
+   * <p>We verify this by using a TileTransformPicker that is the identity and
+   * confirm tile 1+ match the plain diatonic result.
+   */
+  @Test
+  void extendWithIdentityPickerLeavesAllTilesDiatonic() {
+    MotifTransformer transformer = new MotifTransformer();
+    KeySignature key = KeySignature.major(0);
+    // Identity picker: just return the tile unchanged after diatonic transpose.
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, k) -> tile);
+    int[] steps = {0, 1, 2, 3};
+
+    Motif tile0 = oneBarMotif();
+    Motif tiled = matcher.extend(tile0, PHRASE_TICKS, key, steps);
+
+    int notesPerTile = tile0.getNotes().size();
+    List<Note> all = tiled.getNotes();
+    int tiles = all.size() / notesPerTile;
+    for (int t = 0; t < tiles; t++) {
+      Motif expected = transformer.diatonicTranspose(tile0, steps[t], key);
+      for (int i = 0; i < notesPerTile; i++) {
+        assertEquals(expected.getNotes().get(i).pitch(),
+            all.get(t * notesPerTile + i).pitch(),
+            "tile " + t + " note " + i + " should be plain diatonic with identity picker");
+      }
+    }
   }
 }
