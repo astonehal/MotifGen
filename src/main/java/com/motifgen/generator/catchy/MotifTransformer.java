@@ -17,6 +17,45 @@ import java.util.List;
  */
 public final class MotifTransformer {
 
+  /** Enumeration of the randomisable transforms available for motif extension. */
+  public enum Op {
+    INVERT,
+    RETROGRADE,
+    DIATONIC_UP_2,
+    DIATONIC_DOWN_2
+  }
+
+  /**
+   * Dispatches to the concrete transform identified by {@code op}.
+   *
+   * <ul>
+   *   <li>{@code INVERT} – mirrors pitches around the first sounding pitch of {@code motif}.</li>
+   *   <li>{@code RETROGRADE} – reverses the pitch sequence.</li>
+   *   <li>{@code DIATONIC_UP_2} – diatonically transposes up 2 scale steps within {@code key}.</li>
+   *   <li>{@code DIATONIC_DOWN_2} – diatonically transposes down 2 scale steps within
+   *       {@code key}.</li>
+   * </ul>
+   *
+   * @param op  the operation to apply; must not be {@code null}
+   * @param motif the motif to transform; must not be {@code null}
+   * @param key the key context used for diatonic operations; must not be {@code null}
+   * @return a new {@link Motif} with the transform applied
+   */
+  public Motif apply(Op op, Motif motif, KeySignature key) {
+    if (op == null) throw new IllegalArgumentException("op must not be null");
+    if (motif == null) throw new IllegalArgumentException("motif must not be null");
+    if (key == null) throw new IllegalArgumentException("key must not be null");
+    return switch (op) {
+      case INVERT -> {
+        int pivot = firstSoundingPitch(motif);
+        yield invert(motif, pivot);
+      }
+      case RETROGRADE -> retrograde(motif);
+      case DIATONIC_UP_2 -> diatonicTranspose(motif, 2, key);
+      case DIATONIC_DOWN_2 -> diatonicTranspose(motif, -2, key);
+    };
+  }
+
   /** Returns the motif unchanged. */
   public Motif identity(Motif motif) {
     return motif;
@@ -123,5 +162,12 @@ public final class MotifTransformer {
       if (down >= 0 && key.containsPitchClass(((down % 12) + 12) % 12)) return down;
     }
     return clamped;
+  }
+
+  private static int firstSoundingPitch(Motif motif) {
+    for (Note n : motif.getNotes()) {
+      if (!n.isRest()) return n.pitch();
+    }
+    return 60; // fallback: middle C
   }
 }
