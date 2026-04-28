@@ -47,7 +47,7 @@ public final class MotifLengthMatcher {
    * Tile 0 always uses the identity; tiles 1+ delegate to this picker.
    */
   @FunctionalInterface
-  interface TileTransformPicker {
+  public interface TileTransformPicker {
     /**
      * Returns a (possibly transformed) version of {@code tile}.
      *
@@ -122,7 +122,7 @@ public final class MotifLengthMatcher {
    *
    * @param picker the picker to use for tiles 1+; must not be {@code null}
    */
-  MotifLengthMatcher(TileTransformPicker picker) {
+  public MotifLengthMatcher(TileTransformPicker picker) {
     if (picker == null) throw new IllegalArgumentException("picker must not be null");
     this.tileTransformPicker = picker;
   }
@@ -176,7 +176,7 @@ public final class MotifLengthMatcher {
     return best;
   }
 
-  Motif extend(Motif tile0, long phraseTicks, KeySignature key, int[] steps) {
+  public Motif extend(Motif tile0, long phraseTicks, KeySignature key, int[] steps) {
     if (steps == null || steps.length == 0) {
       throw new IllegalArgumentException("steps must be non-empty");
     }
