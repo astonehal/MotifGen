@@ -2,6 +2,7 @@ package com.motifgen.generator.catchy;
 
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
+import com.motifgen.sentiment.SentimentProfile;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
 import java.util.List;
@@ -14,12 +15,11 @@ import java.util.Random;
  * <p>{@code 'A'} sections are always identity copies of the seed motif and are
  * marked immutable. {@code 'B'} sections draw from a contrast set
  * (5th up, 4th down, inversion). {@code 'C'} sections draw from a different
- * contrast set (retrograde, 3rd up, 3rd down). The choice within each set is
- * deterministic per seed so a given run produces a stable fleet.
+ * contrast set (retrograde, 3rd up, 3rd down).
  *
- * <p>If the phrase being seeded is the final phrase of the sentence and is a
- * {@code 'B'} or {@code 'C'} role, the last sounding note is forced onto the
- * key's tonic pitch class to preserve the existing tonic-resolution guarantee.
+ * <p>When a {@link SentimentProfile} is provided, the diatonic step size used
+ * for B/C transforms is biased by arousal (Scenario 5), and
+ * {@link SyncopationApplier} is invoked on every non-A phrase (Scenario 6).
  */
 public final class PhraseSeeder {
 
@@ -29,11 +29,25 @@ public final class PhraseSeeder {
   private enum BTransform { TRANSPOSE_FIFTH_UP, TRANSPOSE_FOURTH_DOWN, INVERT }
   private enum CTransform { RETROGRADE, TRANSPOSE_THIRD_UP, TRANSPOSE_THIRD_DOWN }
 
+  private static final int DEFAULT_STEP_SIZE = 1;
+
   private final Random rng;
   private final MotifTransformer transformer = new MotifTransformer();
+  private final SentimentProfile profile;
 
+  /** Backward-compatible constructor — no sentiment influence. */
   public PhraseSeeder(long seed) {
-    this.rng = new Random(seed);
+    this.rng     = new Random(seed);
+    this.profile = null;
+  }
+
+  /**
+   * Sentiment-aware constructor. Arousal scales the diatonic step size and
+   * triggers {@link SyncopationApplier} on non-A phrases.
+   */
+  public PhraseSeeder(long seed, SentimentProfile profile) {
+    this.rng     = new Random(seed);
+    this.profile = profile;
   }
 
   public SeededPhrase seed(char role, boolean isFinalPhrase, Motif baseMotif,
@@ -42,10 +56,15 @@ public final class PhraseSeeder {
       case 'A' -> transformer.identity(baseMotif);
       case 'B' -> applyB(baseMotif, key);
       case 'C' -> applyC(baseMotif, key);
-      default -> transformer.identity(baseMotif);
+      default  -> transformer.identity(baseMotif);
     };
 
     boolean immutable = role == 'A';
+
+    if (!immutable && profile != null) {
+      long ticksPerBeat = baseMotif.getTicksPerBeat();
+      phrase = SyncopationApplier.apply(phrase, profile, ticksPerBeat, rng);
+    }
 
     if (isFinalPhrase && !immutable) {
       phrase = forceLastNoteToTonic(phrase, key);
@@ -54,21 +73,29 @@ public final class PhraseSeeder {
     return new SeededPhrase(phrase, immutable);
   }
 
+  /** Arousal-biased step size: {@code 1 + (int)(arousal * 3)}. */
+  private int stepSize() {
+    if (profile == null) return DEFAULT_STEP_SIZE;
+    return 1 + (int) (profile.arousal() * 3);
+  }
+
   private Motif applyB(Motif motif, KeySignature key) {
     BTransform choice = BTransform.values()[rng.nextInt(BTransform.values().length)];
+    int step = stepSize();
     return switch (choice) {
-      case TRANSPOSE_FIFTH_UP -> transformer.diatonicTranspose(motif, 4, key);
-      case TRANSPOSE_FOURTH_DOWN -> transformer.diatonicTranspose(motif, -3, key);
-      case INVERT -> transformer.invert(motif, firstSoundingPitch(motif));
+      case TRANSPOSE_FIFTH_UP    -> transformer.diatonicTranspose(motif,  step + 3, key);
+      case TRANSPOSE_FOURTH_DOWN -> transformer.diatonicTranspose(motif, -(step + 2), key);
+      case INVERT                -> transformer.invert(motif, firstSoundingPitch(motif));
     };
   }
 
   private Motif applyC(Motif motif, KeySignature key) {
     CTransform choice = CTransform.values()[rng.nextInt(CTransform.values().length)];
+    int step = stepSize();
     return switch (choice) {
-      case RETROGRADE -> transformer.retrograde(motif);
-      case TRANSPOSE_THIRD_UP -> transformer.diatonicTranspose(motif, 2, key);
-      case TRANSPOSE_THIRD_DOWN -> transformer.diatonicTranspose(motif, -2, key);
+      case RETROGRADE            -> transformer.retrograde(motif);
+      case TRANSPOSE_THIRD_UP    -> transformer.diatonicTranspose(motif,  step + 1, key);
+      case TRANSPOSE_THIRD_DOWN  -> transformer.diatonicTranspose(motif, -(step + 1), key);
     };
   }
 

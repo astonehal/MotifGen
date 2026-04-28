@@ -2,6 +2,7 @@ package com.motifgen.generator.catchy;
 
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
+import com.motifgen.sentiment.SentimentProfile;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
 import java.util.List;
@@ -9,15 +10,37 @@ import java.util.List;
 /**
  * Ensures the melodic peak sits at the planned climax position. If the note
  * at the target index is not already the global maximum, it is transposed
- * upward (staying in key) to exceed the current maximum. MIDI range and
- * singability are respected by preferring the lowest valid pitch that works.
+ * upward (staying in key) to exceed the current maximum.
+ *
+ * <p>When a {@link SentimentProfile} is provided, the lift in semitones is
+ * scaled by arousal: {@code liftSemitones = 1 + (int)(arousal * 6)}, clamped
+ * to [1, 7] (Scenario 8).
  */
 public final class ClimaxPlacer {
 
-  private static final int MIN_LIFT_SEMITONES = 3;
-  private static final int MAX_PITCH = 100;
+  private static final int DEFAULT_LIFT_SEMITONES = 3;
+  private static final int MIN_LIFT_SEMITONES     = 1;
+  private static final int MAX_LIFT_SEMITONES     = 7;
+  private static final int MAX_PITCH              = 100;
 
+  /** Backward-compatible overload — uses the default lift of 3 semitones. */
   public Motif enforceClimax(Motif motif, int climaxIndex, KeySignature key) {
+    return enforceClimaxInternal(motif, climaxIndex, key, DEFAULT_LIFT_SEMITONES);
+  }
+
+  /**
+   * Sentiment-aware overload. Lift semitones = 1 + (int)(arousal * 6), clamped
+   * to [1, 7].
+   */
+  public Motif enforceClimax(Motif motif, int climaxIndex, KeySignature key,
+      SentimentProfile profile) {
+    int lift = 1 + (int) (profile.arousal() * 6);
+    lift = Math.max(MIN_LIFT_SEMITONES, Math.min(MAX_LIFT_SEMITONES, lift));
+    return enforceClimaxInternal(motif, climaxIndex, key, lift);
+  }
+
+  private Motif enforceClimaxInternal(Motif motif, int climaxIndex, KeySignature key,
+      int liftSemitones) {
     List<Note> notes = motif.getNotes();
     int[] soundingIndices = soundingIndices(notes);
 
@@ -40,7 +63,7 @@ public final class ClimaxPlacer {
       if (peaks == 1) return motif;
     }
 
-    int liftedPitch = findInKeyPitchAbove(currentMax + MIN_LIFT_SEMITONES, key);
+    int liftedPitch = findInKeyPitchAbove(currentMax + liftSemitones, key);
 
     List<Note> updated = new ArrayList<>(notes);
     updated.set(targetNoteIndex, new Note(liftedPitch, target.startTick(),
