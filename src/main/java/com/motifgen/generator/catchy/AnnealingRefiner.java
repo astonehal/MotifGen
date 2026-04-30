@@ -61,7 +61,7 @@ public final class AnnealingRefiner {
     return refine(initial, seedMotif, key, immutableIndices, null);
   }
 
-  private Sentence refine(Sentence initial, Motif seedMotif, KeySignature key,
+  public Sentence refine(Sentence initial, Motif seedMotif, KeySignature key,
       Set<Integer> immutableIndices, SentimentProfile profile) {
     Random rng = new Random(seed);
 
