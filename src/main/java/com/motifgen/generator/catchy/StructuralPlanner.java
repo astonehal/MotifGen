@@ -19,7 +19,7 @@ public final class StructuralPlanner {
   private static final Set<String> SUPPORTED_TEMPLATES = Set.of("AABA", "ABAB", "ABAC", "ABCA");
 
   private static final int    DEFAULT_TOTAL_BARS      = 16;
-  private static final double CLIMAX_BASE             = 0.70;
+  private static final double CLIMAX_BASE             = 0.45;
   private static final double CLIMAX_AROUSAL_FACTOR   = 0.25;
   private static final double HIGH_AROUSAL_THRESHOLD  = 0.70;
   private static final double LOW_VALENCE_THRESHOLD   = 0.40;
@@ -50,18 +50,9 @@ public final class StructuralPlanner {
 
   /**
    * Builds a sentiment-aware plan. The climax relative position is
-   * {@code 0.70 - (arousal * 0.25)} so high arousal pushes the climax
-   * later (lower value = earlier in the melody; the position is an index
-   * into the total note list, so a smaller ratio means an earlier index —
-   * wait, we invert: high arousal → climaxRelPos is smaller → earlier index.
-   * Design spec says high-arousal → climax in bars 9–16 (later half).
-   * Resolution: climaxRelPos = 0.70 - (arousal * 0.25); at A=0.85 → 0.4875,
-   * at A=0.25 → 0.6375. A smaller ratio gives an *earlier* note index, which
-   * contradicts "later half". We therefore interpret the spec as: use the
-   * formula for the relative position, and "later half" is satisfied because
-   * 0.4875 * totalNotes rounds to an index that is still past the halfway
-   * point when totalNotes &gt;= 32 (as it is for the 8-note motif with 4
-   * sections: 32 notes, half = 16, 0.4875 * 32 = 15.6 ≈ 16 ≥ 16).
+   * {@code 0.45 + (arousal * 0.25)}, so high arousal (A=1.0) places the
+   * climax at ~70% through the sentence (later half) and low arousal (A=0.0)
+   * places it at ~45% (earlier/middle portion).
    */
   public StructuralPlan plan(Motif motif, String template, KeySignature key,
       SentimentProfile profile) {
@@ -73,7 +64,7 @@ public final class StructuralPlanner {
     int phraseBars      = DEFAULT_TOTAL_BARS / sectionCount;
     int notesPerPhrase  = countSoundingNotes(motif);
     int totalNotes      = notesPerPhrase * sectionCount;
-    double climaxRelPos = CLIMAX_BASE - (profile.arousal() * CLIMAX_AROUSAL_FACTOR);
+    double climaxRelPos = CLIMAX_BASE + (profile.arousal() * CLIMAX_AROUSAL_FACTOR);
     int climaxPosition  = Math.max(0,
         Math.min(totalNotes - 1, (int) Math.round(totalNotes * climaxRelPos)));
     return new StructuralPlan(template, phraseBars, DEFAULT_TOTAL_BARS,

@@ -36,9 +36,9 @@ class StructuralPlannerSentimentTest {
 
   @Test
   void highArousalClimaxFallsInLaterHalf() {
-    // climaxRelPos = 0.70 - (arousal * 0.25); EXCITED A=0.85 → 0.70 - 0.2125 = 0.4875
-    // With 8 notes/phrase × 4 phrases = 32 notes total, 0.4875 * 32 = 15.6 → index 16
-    // index 16 is >= 16 (half of 32) → in later half
+    // climaxRelPos = 0.45 + (arousal * 0.25); EXCITED A=0.85 → 0.45 + 0.2125 = 0.6625
+    // With 8 notes/phrase × 4 phrases = 32 notes total, 0.6625 * 32 = 21.2 → index 21
+    // index 21 is >= 16 (half of 32) → in later half ✓
     StructuralPlanner planner = new StructuralPlanner();
     SentimentProfile excited = SentimentProfile.fromLabel("EXCITED"); // A=0.85
     Motif motif = cMajorMotif();
@@ -53,9 +53,9 @@ class StructuralPlannerSentimentTest {
 
   @Test
   void lowArousalClimaxFallsInEarlierPortion() {
-    // RELAXED A=0.25 → climaxRelPos = 0.70 - 0.0625 = 0.6375
-    // 32 notes * 0.6375 = 20.4 → index 20, which is > half (16) but
-    // smaller than high-arousal value; we just assert it's < high-arousal climax
+    // RELAXED A=0.25 → climaxRelPos = 0.45 + 0.0625 = 0.5125 → index 16
+    // EXCITED A=0.85 → climaxRelPos = 0.45 + 0.2125 = 0.6625 → index 21
+    // High arousal → later index (larger), low arousal → earlier index (smaller)
     StructuralPlanner planner = new StructuralPlanner();
     SentimentProfile relaxed = SentimentProfile.fromLabel("RELAXED"); // A=0.25
     SentimentProfile excited = SentimentProfile.fromLabel("EXCITED"); // A=0.85
@@ -65,9 +65,9 @@ class StructuralPlannerSentimentTest {
     int relaxedClimax = planner.plan(motif, "AABA", key, relaxed).climaxPosition();
     int excitedClimax = planner.plan(motif, "AABA", key, excited).climaxPosition();
 
-    assertTrue(relaxedClimax >= excitedClimax,
+    assertTrue(relaxedClimax <= excitedClimax,
         "Low-arousal climax (" + relaxedClimax
-            + ") should not be later than high-arousal (" + excitedClimax + ")");
+            + ") should be earlier than high-arousal (" + excitedClimax + ")");
   }
 
   // ── Scenario 7: structural preference ───────────────────────────────────
