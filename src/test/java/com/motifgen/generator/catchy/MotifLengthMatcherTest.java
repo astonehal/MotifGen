@@ -2,6 +2,7 @@ package com.motifgen.generator.catchy;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.motifgen.model.Motif;
@@ -27,7 +28,8 @@ class MotifLengthMatcherTest {
       notes.add(new Note(p, tick, TPB, 90));
       tick += TPB;
     }
-    return new Motif(notes, 4, BPB, TPB);
+    // bars=1 → totalTicks = BAR_TICKS, which is less than PHRASE_TICKS so tiling is triggered.
+    return new Motif(notes, 1, BPB, TPB);
   }
 
   private Motif eightBarMotif() {
@@ -426,5 +428,103 @@ class MotifLengthMatcherTest {
             "tile " + t + " note " + i + " should be plain diatonic with identity picker");
       }
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // Issue #15: trailing-silence motifs must not trigger spurious tiling
+  // -----------------------------------------------------------------------
+
+  /**
+   * Scenario 1: a motif whose declared length (totalTicks) equals phraseTicks
+   * but whose content ends before totalTicks must be returned as-is — no
+   * phantom notes beyond the actual content should appear.
+   */
+  @Test
+  void matchDoesNotTileWhenDeclaredLengthEqualsPhraseLength() {
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, key) -> tile);
+    // 4-bar motif: content fills only the first 2 bars; last 2 bars are silence.
+    long halfPhrase = PHRASE_TICKS / 2;
+    List<Note> notes = new ArrayList<>();
+    long tick = 0;
+    for (int i = 0; i < 8; i++) {
+      notes.add(new Note(60 + i, tick, TPB, 90));
+      tick += TPB;
+    }
+    // bars=4 → totalTicks = PHRASE_TICKS; content ends at halfPhrase
+    Motif source = new Motif(notes, 4, BPB, TPB);
+
+    Motif matched = matcher.match(source, PHRASE_TICKS, KeySignature.major(0), 0L);
+
+    // Must be returned unchanged: same note count, no notes beyond halfPhrase.
+    assertEquals(source.getNotes().size(), matched.getNotes().size(),
+        "note count must not change when declared length == phraseTicks");
+    long maxEnd = matched.getNotes().stream().mapToLong(Note::endTick).max().orElse(0L);
+    assertTrue(maxEnd <= halfPhrase,
+        "no notes should appear beyond the actual content boundary, got maxEnd=" + maxEnd);
+  }
+
+  /**
+   * Scenario 2: a motif whose totalTicks is strictly less than phraseTicks must
+   * still be tiled to fill the phrase.
+   */
+  @Test
+  void matchTilesWhenDeclaredLengthLessThanPhraseLength() {
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, key) -> tile);
+    // oneBarMotif() has bars=4 but notes span only 1 bar — wait, we need
+    // totalTicks < phraseTicks, so build a genuine 1-bar (bars=1) motif.
+    List<Note> notes = new ArrayList<>();
+    long tick = 0;
+    for (int p : new int[]{60, 62, 64, 65}) {
+      notes.add(new Note(p, tick, TPB, 90));
+      tick += TPB;
+    }
+    Motif source = new Motif(notes, 1, BPB, TPB); // totalTicks = BAR_TICKS < PHRASE_TICKS
+
+    Motif matched = matcher.match(source, PHRASE_TICKS, KeySignature.major(0), 0L);
+
+    assertTrue(matched.getNotes().size() > source.getNotes().size(),
+        "tiling should produce more notes than the original single-bar motif");
+    long maxEnd = matched.getNotes().stream().mapToLong(Note::endTick).max().orElse(0L);
+    assertTrue(maxEnd >= PHRASE_TICKS - TPB,
+        "tiled motif should reach near the phrase boundary, got maxEnd=" + maxEnd);
+  }
+
+  /**
+   * Scenario 3: extend() must space tiles by totalTicks (the declared length),
+   * not by the content span, so no overlap or gap appears.
+   */
+  @Test
+  void extendSpacesTilesByDeclaredTotalTicks() {
+    MotifLengthMatcher matcher = new MotifLengthMatcher((tile, key) -> tile);
+    // 1-bar motif whose content ends at tick 2*TPB (half bar), but totalTicks = BAR_TICKS.
+    List<Note> notes = List.of(
+        new Note(60, 0, TPB, 90),
+        new Note(62, TPB, TPB, 90));
+    Motif source = new Motif(notes, 1, BPB, TPB); // totalTicks = BAR_TICKS = 4*TPB
+
+    // Extend over 2 bars using a flat step pattern.
+    long twoBarTicks = 2 * BAR_TICKS;
+    Motif tiled = matcher.extend(source, twoBarTicks, KeySignature.major(0), new int[]{0, 0});
+
+    // Tile 1 must start at BAR_TICKS (= totalTicks of source), not at 2*TPB (content span).
+    Note tile1First = tiled.getNotes().get(notes.size());
+    assertEquals(BAR_TICKS, tile1First.startTick(),
+        "second tile must start at totalTicks offset, not content-span offset");
+  }
+
+  /**
+   * Scenario 4: if content span exceeds totalTicks, match() must throw
+   * IllegalArgumentException (malformed motif guard).
+   */
+  @Test
+  void matchThrowsWhenContentExceedsDeclaredLength() {
+    MotifLengthMatcher matcher = new MotifLengthMatcher();
+    // bars=1 → totalTicks = BAR_TICKS = 4*TPB, but we place a note that ends at 5*TPB.
+    List<Note> notes = List.of(new Note(60, 0, 5L * TPB, 90));
+    Motif malformed = new Motif(notes, 1, BPB, TPB);
+
+    assertThrows(IllegalArgumentException.class,
+        () -> matcher.match(malformed, PHRASE_TICKS, KeySignature.major(0), 0L),
+        "match() must reject a motif whose content span exceeds totalTicks");
   }
 }
