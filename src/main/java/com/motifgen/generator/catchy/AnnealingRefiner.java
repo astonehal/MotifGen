@@ -4,6 +4,7 @@ import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
 import com.motifgen.scoring.SentenceScorer;
+import com.motifgen.sentiment.SentimentProfile;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -46,8 +47,22 @@ public final class AnnealingRefiner {
     return refine(initial, seedMotif, key, Collections.emptySet());
   }
 
+  /**
+   * Sentiment-aware overload. When {@code profile} has high arousal the rhythm
+   * mutation palette is biased toward shorter note durations.
+   */
+  public Sentence refine(Sentence initial, Motif seedMotif, KeySignature key,
+      SentimentProfile profile) {
+    return refine(initial, seedMotif, key, Collections.emptySet(), profile);
+  }
+
   public Sentence refine(Sentence initial, Motif seedMotif, KeySignature key,
       Set<Integer> immutableIndices) {
+    return refine(initial, seedMotif, key, immutableIndices, null);
+  }
+
+  public Sentence refine(Sentence initial, Motif seedMotif, KeySignature key,
+      Set<Integer> immutableIndices, SentimentProfile profile) {
     Random rng = new Random(seed);
 
     List<Integer> mutableIndices = new ArrayList<>();
@@ -64,7 +79,7 @@ public final class AnnealingRefiner {
 
     for (int i = 0; i < maxIterations; i++) {
       Weakest weakest = identifyWeakest(scorer.breakdown(current));
-      Sentence candidate = scorer.score(mutate(current, weakest, key, rng, mutableIndices));
+      Sentence candidate = scorer.score(mutate(current, weakest, key, rng, mutableIndices, profile));
 
       double delta = candidate.getScore() - current.getScore();
       if (delta > 0 || rng.nextDouble() < Math.exp(delta / Math.max(1e-6, temperature))) {
@@ -80,7 +95,7 @@ public final class AnnealingRefiner {
   }
 
   private Sentence mutate(Sentence sentence, Weakest weakest, KeySignature key,
-      Random rng, List<Integer> mutableIndices) {
+      Random rng, List<Integer> mutableIndices, SentimentProfile profile) {
     List<Motif> phrases = new ArrayList<>(sentence.getPhrases());
     int phraseIdx = mutableIndices.get(rng.nextInt(mutableIndices.size()));
     Motif phrase = phrases.get(phraseIdx);
@@ -95,7 +110,7 @@ public final class AnnealingRefiner {
       case REPETITION -> applyRepetitionMutation(phrases, phraseIdx, notes, soundingIdx, rng);
       case CONTOUR -> applyContourMutation(notes, soundingIdx, key, rng);
       case COMPACTNESS -> applyCompactnessMutation(notes, soundingIdx);
-      case RHYTHM -> applyRhythmMutation(notes, soundingIdx, rng);
+      case RHYTHM -> applyRhythmMutation(notes, soundingIdx, rng, profile);
       case CONVENTIONALITY -> applyConventionalityMutation(notes, soundingIdx, key, rng);
       case HOOK -> applyHookMutation(notes, soundingIdx, rng);
     }
@@ -156,11 +171,12 @@ public final class AnnealingRefiner {
         target.durationTicks(), target.velocity()));
   }
 
-  private void applyRhythmMutation(List<Note> notes, List<Integer> soundingIdx, Random rng) {
+  private void applyRhythmMutation(List<Note> notes, List<Integer> soundingIdx,
+      Random rng, SentimentProfile profile) {
     long ticksPerBeat = inferTicksPerBeat(notes, soundingIdx);
     long quarter = Math.max(1L, ticksPerBeat);
-    long eighth = Math.max(1L, ticksPerBeat / 2L);
-    long half = ticksPerBeat * 2L;
+    long eighth  = Math.max(1L, ticksPerBeat / 2L);
+    long half    = ticksPerBeat * 2L;
     long[] palette = {eighth, quarter, half};
 
     Map<Long, Integer> counts = new HashMap<>();
@@ -170,14 +186,21 @@ public final class AnnealingRefiner {
     long modal = counts.entrySet().stream()
         .max(Map.Entry.comparingByValue()).map(Map.Entry::getKey).orElse(quarter);
 
-    long target = palette[0];
-    int targetCount = Integer.MAX_VALUE;
-    for (long candidate : palette) {
-      if (candidate == modal) continue;
-      int c = counts.getOrDefault(candidate, 0);
-      if (c < targetCount) {
-        targetCount = c;
-        target = candidate;
+    // High arousal biases toward shorter durations: pick eighth note directly
+    // when arousal >= 0.7 and the modal duration is not already eighth.
+    long target;
+    if (profile != null && profile.arousal() >= 0.7 && modal != eighth) {
+      target = eighth;
+    } else {
+      target = palette[0];
+      int targetCount = Integer.MAX_VALUE;
+      for (long candidate : palette) {
+        if (candidate == modal) continue;
+        int c = counts.getOrDefault(candidate, 0);
+        if (c < targetCount) {
+          targetCount = c;
+          target = candidate;
+        }
       }
     }
 

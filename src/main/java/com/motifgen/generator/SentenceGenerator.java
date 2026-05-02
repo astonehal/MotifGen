@@ -10,6 +10,8 @@ import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
 import com.motifgen.scoring.SentenceScorer;
+import com.motifgen.sentiment.KeyAffinity;
+import com.motifgen.sentiment.SentimentProfile;
 import com.motifgen.theory.KeyDetector;
 import com.motifgen.theory.KeySignature;
 import java.util.ArrayList;
@@ -51,6 +53,20 @@ public class SentenceGenerator {
   }
 
   public List<Sentence> generate(Motif motif) {
+    return generate(motif, null);
+  }
+
+  /**
+   * Sentiment-aware generation. The related-key fleet is weighted by
+   * {@link KeyAffinity}, and each pipeline run uses the sentiment profile
+   * to bias phrase seeding, climax placement, and structural template
+   * selection.
+   *
+   * @param motif   seed motif
+   * @param profile sentiment profile, or {@code null} for no sentiment influence
+   * @return sorted (best-first) list of 20 sentence candidates
+   */
+  public List<Sentence> generate(Motif motif, SentimentProfile profile) {
     KeySignature detectedKey = KeyDetector.bestKey(motif);
     List<KeySignature> keys = detectedKey.relatedKeys();
 
@@ -67,7 +83,7 @@ public class SentenceGenerator {
         Sentence best = null;
         for (int s = 0; s < SEEDS_PER_COMBO; s++) {
           long runSeed = comboSeed + s * 31L;
-          Sentence produced = scorer.score(runPipeline(baseMotif, key, template, runSeed));
+          Sentence produced = scorer.score(runPipeline(baseMotif, key, template, runSeed, profile));
           if (best == null || produced.getScore() > best.getScore()) {
             best = produced;
           }
@@ -81,13 +97,18 @@ public class SentenceGenerator {
     return candidates;
   }
 
-  private Sentence runPipeline(Motif motif, KeySignature key, String template, long seed) {
-    StructuralPlan plan = planner.plan(motif, template, key);
+  private Sentence runPipeline(Motif motif, KeySignature key, String template, long seed,
+      SentimentProfile profile) {
+    StructuralPlan plan = profile != null
+        ? planner.plan(motif, template, key, profile)
+        : planner.plan(motif, template, key);
     long phraseTicks = (long) plan.phraseBars() * motif.getBeatsPerBar()
         * motif.getTicksPerBeat();
     Motif lengthMatched = lengthMatcher.match(motif, phraseTicks, key, seed);
 
-    PhraseSeeder seeder = new PhraseSeeder(seed);
+    PhraseSeeder seeder = profile != null
+        ? new PhraseSeeder(seed, profile)
+        : new PhraseSeeder(seed);
     List<Motif> phrases = new ArrayList<>();
     Set<Integer> immutableIndices = new HashSet<>();
     int sections = plan.sectionCount();
@@ -103,7 +124,9 @@ public class SentenceGenerator {
 
     int climaxPhraseIdx = phraseIndexForClimax(plan.climaxPosition(), phrases);
     if (climaxPhraseIdx >= 0 && !immutableIndices.contains(climaxPhraseIdx)) {
-      Motif climaxed = applyClimax(phrases, plan, key);
+      Motif climaxed = profile != null
+          ? applyClimax(phrases, plan, key, profile)
+          : applyClimax(phrases, plan, key);
       phrases = splitByPhrase(climaxed, phrases);
     }
 
@@ -111,7 +134,9 @@ public class SentenceGenerator {
         key.name(), 0);
 
     AnnealingRefiner refiner = new AnnealingRefiner(seed ^ 0xA11CE, REFINEMENT_ITERATIONS);
-    Sentence refined = refiner.refine(assembled, motif, key, immutableIndices);
+    Sentence refined = profile != null
+        ? refiner.refine(assembled, motif, key, immutableIndices, profile)
+        : refiner.refine(assembled, motif, key, immutableIndices);
     int finalPhraseIdx = refined.getPhrases().size() - 1;
     if (!immutableIndices.contains(finalPhraseIdx)) {
       refined = forceFinalNoteToTonic(refined, key, finalPhraseIdx);
@@ -165,6 +190,11 @@ public class SentenceGenerator {
   }
 
   private Motif applyClimax(List<Motif> phrases, StructuralPlan plan, KeySignature key) {
+    return applyClimax(phrases, plan, key, null);
+  }
+
+  private Motif applyClimax(List<Motif> phrases, StructuralPlan plan, KeySignature key,
+      SentimentProfile profile) {
     List<Note> all = new ArrayList<>();
     long offset = 0;
     for (Motif phrase : phrases) {
@@ -175,6 +205,9 @@ public class SentenceGenerator {
     }
     Motif combined = new Motif(all, plan.totalBars(),
         phrases.get(0).getBeatsPerBar(), phrases.get(0).getTicksPerBeat());
+    if (profile != null) {
+      return climaxPlacer.enforceClimax(combined, plan.climaxPosition(), key, profile);
+    }
     return climaxPlacer.enforceClimax(combined, plan.climaxPosition(), key);
   }
 

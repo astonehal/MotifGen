@@ -7,6 +7,7 @@ import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
 import com.motifgen.scoring.SentenceScorer;
+import com.motifgen.sentiment.SentimentProfile;
 import com.motifgen.theory.KeyDetector;
 
 import java.io.File;
@@ -43,13 +44,43 @@ public class MotifGen {
         int tempo = args.length > 2 ? Integer.parseInt(args[2]) : DEFAULT_TEMPO;
         OutputFormat format = args.length > 3 ? parseFormat(args[3]) : OutputFormat.MIDI;
 
+        // Parse optional sentiment flags: --sentiment LABEL | --valence V --arousal A
+        SentimentProfile sentiment = parseSentimentArgs(args);
+
         try {
-            run(inputPath, outputDir, tempo, format);
+            run(inputPath, outputDir, tempo, format, sentiment);
         } catch (Exception e) {
             System.err.println("Error: " + e.getMessage());
             e.printStackTrace();
             System.exit(1);
         }
+    }
+
+    /**
+     * Scans {@code args} for {@code --sentiment LABEL}, {@code --valence V}, and
+     * {@code --arousal A} flags (case-insensitive label). Returns {@code null} if
+     * none are present (random profile will be used by the generator).
+     */
+    static SentimentProfile parseSentimentArgs(String[] args) {
+        String label = null;
+        Double valence = null;
+        Double arousal = null;
+        for (int i = 0; i < args.length - 1; i++) {
+            switch (args[i].toLowerCase()) {
+                case "--sentiment" -> label   = args[i + 1];
+                case "--valence"   -> valence = Double.parseDouble(args[i + 1]);
+                case "--arousal"   -> arousal = Double.parseDouble(args[i + 1]);
+            }
+        }
+        if (label != null) {
+            return SentimentProfile.fromLabel(label);
+        }
+        if (valence != null || arousal != null) {
+            double v = valence != null ? valence : 0.5;
+            double a = arousal != null ? arousal : 0.5;
+            return SentimentProfile.fromVA(v, a);
+        }
+        return null;
     }
 
     private static OutputFormat parseFormat(String value) {
@@ -61,10 +92,15 @@ public class MotifGen {
     }
 
     public static void run(String inputPath, String outputDir, int tempo) throws Exception {
-        run(inputPath, outputDir, tempo, OutputFormat.MIDI);
+        run(inputPath, outputDir, tempo, OutputFormat.MIDI, null);
     }
 
     public static void run(String inputPath, String outputDir, int tempo, OutputFormat format) throws Exception {
+        run(inputPath, outputDir, tempo, format, null);
+    }
+
+    public static void run(String inputPath, String outputDir, int tempo,
+            OutputFormat format, SentimentProfile sentiment) throws Exception {
         System.out.println("=== MotifGen - Musical Sentence Generator ===\n");
 
         // 1. Load the motif
@@ -83,13 +119,21 @@ public class MotifGen {
             System.out.printf("    %-15s  correlation: %.4f%n", kr.key().name(), kr.correlation());
         }
 
-        // 3. Generate sentence candidates
+        // 3. Resolve / print sentiment
+        SentimentProfile profile = sentiment;
+        if (profile == null) {
+            profile = SentimentProfile.random(new java.util.Random());
+        }
+        System.out.printf("Sentiment: %s (V=%.2f, A=%.2f)%n",
+                profile.closestLabel(), profile.valence(), profile.arousal());
+
+        // 4. Generate sentence candidates
         System.out.println("\nGenerating sentence candidates...");
         SentenceGenerator generator = new SentenceGenerator();
-        List<Sentence> candidates = generator.generate(motif);
+        List<Sentence> candidates = generator.generate(motif, profile);
         System.out.println("  Generated " + candidates.size() + " candidates");
 
-        // 4. Score and rank
+        // 5. Score and rank
         System.out.println("\nScoring candidates...");
         SentenceScorer scorer = new SentenceScorer();
         List<Sentence> ranked = scorer.scoreAndRank(candidates);
