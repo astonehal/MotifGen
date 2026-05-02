@@ -13,6 +13,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import javax.sound.midi.MetaMessage;
 import javax.sound.midi.MidiEvent;
 import javax.sound.midi.MidiSystem;
 import javax.sound.midi.Sequence;
@@ -223,51 +224,46 @@ class TrailingSilenceTilingE2ETest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Given TestMotif2.mid processed via the full MotifGen pipeline
+   * Given a programmatic TestMotif2-equivalent MIDI (4 bars, last note ends at tick 6719)
+   * processed via the full MotifGen pipeline
    * When the output MIDI files are examined
-   * Then no notes appear after tick 6719 in any A-section phrase
-   * (TestMotif2.mid has totalTicks=7680, last note ends at tick 6719;
-   *  phantom notes previously appeared at ticks 6719 and 7439).
+   * Then no notes appear after tick 6719 in the first phrase window (0..7680)
+   * (phantom notes previously appeared at ticks 6719 and 7439 due to incorrect tiling).
    */
   @Test
   void givenTestMotif2Mid_whenProcessedViaFullPipeline_thenNoPhantomNotesAppearAfterTick6719()
       throws Exception {
 
-    String testMotif2Path = "TestMotif2.mid";
-    File inputFile = new File(testMotif2Path);
-    assertTrue(inputFile.exists(),
-        "TestMotif2.mid must exist at project root: " + inputFile.getAbsolutePath());
+    // Build a fixture equivalent to TestMotif2.mid:
+    // 14 notes filling up to tick 6719, leaving 961 ticks of trailing silence to bar 4 (7680).
+    int[] pitches = {60, 62, 64, 65, 67, 65, 64, 62, 60, 62, 64, 65, 67, 60};
+    long[] durations = {480, 480, 480, 480, 480, 480, 480, 480, 480, 480, 480, 480, 480, 479};
+    // sum = 13*480 + 479 = 6719  →  last note ends at tick 6719, trailing silence 6719..7680
+    File inputFile = makeMidi(tempDir.resolve("testmotif2_fixture.mid").toFile(),
+        pitches, durations);
 
     String outDir = tempDir.resolve("testmotif2_output").toString();
     new File(outDir).mkdirs();
 
-    MotifGen.run(testMotif2Path, outDir, 120);
+    MotifGen.run(inputFile.getAbsolutePath(), outDir, 120);
 
     File[] outputFiles = new File(outDir).listFiles((d, n) -> n.endsWith(".mid"));
     assertNotNull(outputFiles, "output directory must contain MIDI files");
-    assertTrue(outputFiles.length >= 1,
-        "at least one MIDI file must be produced");
+    assertTrue(outputFiles.length >= 1, "at least one MIDI file must be produced");
 
-    // The phantom-note boundary: the last real note in TestMotif2.mid ends at 6719.
-    // No note should start at tick >= 6719 within what would be an A-section phrase
-    // (the first 7680 ticks of the output, since each phrase = 1 bar-group of 7680 ticks).
+    // No NOTE_ON should appear at tick > 6719 within the first phrase window (0..7680).
+    // Before the fix, a phantom tile was placed at tick 6719 with notes at 6719 and 7439.
     long phantomBoundaryTick = 6719L;
 
-    // Examine all output MIDI files for phantom notes
     for (File midiFile : outputFiles) {
       Sequence seq = MidiSystem.getSequence(midiFile);
-
       for (Track track : seq.getTracks()) {
         for (int i = 0; i < track.size(); i++) {
           MidiEvent event = track.get(i);
           if (!(event.getMessage() instanceof ShortMessage sm)) continue;
           if (sm.getCommand() != ShortMessage.NOTE_ON) continue;
-          if (sm.getData2() == 0) continue; // velocity-0 NOTE_ON is NOTE_OFF
-
+          if (sm.getData2() == 0) continue;
           long tick = event.getTick();
-
-          // Check within the range of the first phrase (0..7680).
-          // Phantom notes were observed at 6719 and 7439, both within a 7680-tick window.
           if (tick < 7680L) {
             assertTrue(tick <= phantomBoundaryTick,
                 "phantom note detected in " + midiFile.getName()
@@ -281,6 +277,33 @@ class TrailingSilenceTilingE2ETest {
   // ---------------------------------------------------------------------------
   // Helpers
   // ---------------------------------------------------------------------------
+
+  private static File makeMidi(File path, int[] pitches, long[] durations) throws Exception {
+    Sequence seq = new Sequence(Sequence.PPQ, TICKS_PER_BEAT);
+    Track track = seq.createTrack();
+
+    MetaMessage timeSig = new MetaMessage();
+    timeSig.setMessage(0x58, new byte[] {4, 2, 24, 8}, 4);
+    track.add(new MidiEvent(timeSig, 0));
+    MetaMessage tempo = new MetaMessage();
+    int mpq = 500_000;
+    tempo.setMessage(0x51,
+        new byte[] {(byte) (mpq >> 16), (byte) (mpq >> 8), (byte) mpq}, 3);
+    track.add(new MidiEvent(tempo, 0));
+
+    long tick = 0;
+    for (int i = 0; i < pitches.length; i++) {
+      ShortMessage on = new ShortMessage();
+      on.setMessage(ShortMessage.NOTE_ON, 0, pitches[i], 90);
+      track.add(new MidiEvent(on, tick));
+      ShortMessage off = new ShortMessage();
+      off.setMessage(ShortMessage.NOTE_OFF, 0, pitches[i], 0);
+      track.add(new MidiEvent(off, tick + durations[i]));
+      tick += durations[i];
+    }
+    MidiSystem.write(seq, 1, path);
+    return path;
+  }
 
   /**
    * Builds a motif with the given {@code totalTicks} declared length where the
