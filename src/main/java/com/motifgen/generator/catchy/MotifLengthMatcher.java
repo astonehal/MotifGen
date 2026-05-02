@@ -154,9 +154,15 @@ public final class MotifLengthMatcher {
    * @return the length-matched motif
    */
   public Motif match(Motif motif, long phraseTicks, KeySignature key, long seed) {
+    long declared = motif.totalTicks();
     long content = span(motif).durationTicks();
-    if (content == phraseTicks || content == 0L) return motif;
-    if (content > phraseTicks) return reduce(motif, phraseTicks);
+    if (content > declared) {
+      throw new IllegalArgumentException(
+          "Motif content span (" + content + " ticks) exceeds declared length ("
+              + declared + " ticks)");
+    }
+    if (declared == phraseTicks || content == 0L) return motif;
+    if (declared > phraseTicks) return reduce(motif, phraseTicks);
 
     Motif best = null;
     double bestScore = Double.NEGATIVE_INFINITY;
@@ -180,7 +186,7 @@ public final class MotifLengthMatcher {
     if (steps == null || steps.length == 0) {
       throw new IllegalArgumentException("steps must be non-empty");
     }
-    long tileTicks = span(tile0).durationTicks();
+    long tileTicks = tile0.totalTicks();
     if (tileTicks <= 0L) return tile0;
 
     List<Note> out = new ArrayList<>();

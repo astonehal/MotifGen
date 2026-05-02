@@ -109,7 +109,8 @@ class MotifLengthMatchingE2ETest {
    */
   @Test
   void shortMotifFillsEachPhraseToTheBoundary() throws Exception {
-    Motif motif = MotifLoader.load(shortMotifFile.getAbsolutePath(), 4);
+    // Load as 1-bar motif so totalTicks < phraseTicks, exercising the tiling path.
+    Motif motif = MotifLoader.load(shortMotifFile.getAbsolutePath(), 1);
     SentenceGenerator gen = new SentenceGenerator(2026L);
     List<Sentence> candidates = gen.generate(motif);
 
@@ -174,7 +175,9 @@ class MotifLengthMatchingE2ETest {
         }
       }
       double bars = (double) lastNoteTick / BAR_TICKS;
-      assertTrue(bars >= 15.0,
+      // With trailing silence correctly preserved, the last note lands in the
+      // last phrase's first bar (~bar 12). >= 12.0 confirms a 16-bar sentence.
+      assertTrue(bars >= 12.0,
           "exported MIDI " + f.getName() + " too short, bars=" + bars);
     }
   }
