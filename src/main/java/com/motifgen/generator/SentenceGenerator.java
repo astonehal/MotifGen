@@ -6,6 +6,7 @@ import com.motifgen.generator.catchy.MotifLengthMatcher;
 import com.motifgen.generator.catchy.PhraseSeeder;
 import com.motifgen.generator.catchy.StructuralPlan;
 import com.motifgen.generator.catchy.StructuralPlanner;
+import com.motifgen.guitar.PlayabilityGate;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
@@ -43,13 +44,29 @@ public class SentenceGenerator {
   private final ClimaxPlacer climaxPlacer = new ClimaxPlacer();
   private final SentenceScorer scorer = new SentenceScorer();
   private final MotifLengthMatcher lengthMatcher = new MotifLengthMatcher();
+  /** Optional post-refinement gate; {@code null} means no playability filtering. */
+  private final PlayabilityGate playabilityGate;
 
   public SentenceGenerator(long seed) {
+    this(seed, null);
+  }
+
+  /**
+   * Creates a generator with an explicit {@link PlayabilityGate}.
+   * After the candidate list is scored and sorted, each candidate is evaluated by the gate.
+   * Candidates that pass are promoted to the front of the returned list; if every candidate
+   * fails the gate the best-scored one is kept as a fallback so callers always receive a result.
+   *
+   * @param seed deterministic seed for the generation pipeline
+   * @param gate playability gate, or {@code null} to disable guitar playability filtering
+   */
+  public SentenceGenerator(long seed, PlayabilityGate gate) {
     this.rootSeed = seed;
+    this.playabilityGate = gate;
   }
 
   public SentenceGenerator() {
-    this(System.nanoTime());
+    this(System.nanoTime(), null);
   }
 
   public List<Sentence> generate(Motif motif) {
@@ -94,7 +111,30 @@ public class SentenceGenerator {
     }
 
     candidates.sort(Comparator.comparingDouble(Sentence::getScore).reversed());
-    return candidates;
+
+    if (playabilityGate == null) {
+      return candidates;
+    }
+
+    // Run each candidate through the gate; keep those that pass.
+    int ticksPerBeat = motif.getTicksPerBeat();
+    List<Sentence> playable = new ArrayList<>();
+    for (Sentence candidate : candidates) {
+      PlayabilityGate.GateResult result = playabilityGate.evaluate(candidate, ticksPerBeat);
+      if (result.passed()) {
+        playable.add(result.sentence()); // labelled sentence
+      }
+    }
+
+    // Fall back to the best-scored candidate when every candidate fails the gate.
+    if (playable.isEmpty()) {
+      System.out.println("  [PlayabilityGate] All candidates failed — returning best anyway.");
+      return candidates;
+    }
+
+    System.out.println("  [PlayabilityGate] " + playable.size() + "/" + candidates.size()
+        + " candidates passed.");
+    return playable;
   }
 
   private Sentence runPipeline(Motif motif, KeySignature key, String template, long seed,

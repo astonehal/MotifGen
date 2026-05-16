@@ -3,6 +3,7 @@ package com.motifgen;
 import com.motifgen.exporter.MidiExporter;
 import com.motifgen.exporter.MusicXMLExporter;
 import com.motifgen.generator.SentenceGenerator;
+import com.motifgen.guitar.PlayabilityGate;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
@@ -34,9 +35,9 @@ public class MotifGen {
     public enum OutputFormat { MIDI, MUSICXML, BOTH }
 
     public static void main(String[] args) {
-        if (args.length < 1) {
+        if (args.length < 1 || args[0].equalsIgnoreCase("--help") || args[0].equalsIgnoreCase("-h")) {
             printUsage();
-            System.exit(1);
+            System.exit(args.length < 1 ? 1 : 0);
         }
 
         String inputPath = args[0];
@@ -129,7 +130,7 @@ public class MotifGen {
 
         // 4. Generate sentence candidates
         System.out.println("\nGenerating sentence candidates...");
-        SentenceGenerator generator = new SentenceGenerator();
+        SentenceGenerator generator = new SentenceGenerator(System.nanoTime(), new PlayabilityGate());
         List<Sentence> candidates = generator.generate(motif, profile);
         System.out.println("  Generated " + candidates.size() + " candidates");
 
@@ -221,12 +222,21 @@ public class MotifGen {
         System.out.println("MotifGen - Musical Sentence Generator");
         System.out.println();
         System.out.println("Usage: java -jar MotifGen.jar <input_file> [output_dir] [tempo_bpm] [format]");
+        System.out.println("                              [--sentiment LABEL | --valence V --arousal A]");
         System.out.println();
-        System.out.println("  input_file  - MIDI (.mid/.midi) or MusicXML (.xml/.musicxml) file");
-        System.out.println("                containing a 4-bar motif");
-        System.out.println("  output_dir  - Directory for output files (default: current dir)");
-        System.out.println("  tempo_bpm   - Tempo in BPM for output (default: 120)");
-        System.out.println("  format      - Output format: midi, musicxml, or both (default: midi)");
+        System.out.println("  input_file        - MIDI (.mid/.midi) or MusicXML (.xml/.musicxml) file");
+        System.out.println("                      containing a 4-bar motif");
+        System.out.println("  output_dir        - Directory for output files (default: current dir)");
+        System.out.println("  tempo_bpm         - Tempo in BPM for output (default: 120)");
+        System.out.println("  format            - Output format: midi, musicxml, or both (default: midi)");
+        System.out.println();
+        System.out.println("Sentiment options (optional, influence key/structure/rhythm of output):");
+        System.out.println("  --sentiment LABEL - Named sentiment; one of:");
+        System.out.println("                      HAPPY, EXCITED, RELAXED, CONTENT,");
+        System.out.println("                      SAD, GLOOMY, TENSE, ANGRY");
+        System.out.println("  --valence V       - Valence in [-1.0, 1.0] (negative=sad, positive=happy)");
+        System.out.println("  --arousal A       - Arousal in [-1.0, 1.0] (negative=calm, positive=energetic)");
+        System.out.println("                      (if omitted, a random sentiment is chosen)");
         System.out.println();
         System.out.println("The application will:");
         System.out.println("  1. Load the 4-bar motif from the input file");

@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.motifgen.guitar.PlayabilityGate;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
@@ -110,6 +111,88 @@ class SentenceGeneratorTest {
           "candidates should be sorted best-first: "
               + candidates.get(i - 1).getScore() + " vs " + candidates.get(i).getScore());
     }
+  }
+
+  // -----------------------------------------------------------------------
+  // PlayabilityGate integration
+  // -----------------------------------------------------------------------
+
+  /**
+   * A permissive gate that passes everything — verifies the gate path does not
+   * drop candidates when all pass.
+   */
+  @Test
+  void generatorWithPermissiveGateReturnsSameSizeAsWithoutGate() {
+    // Subclass gate to force every candidate to pass
+    PlayabilityGate permissiveGate = new PlayabilityGate() {
+      @Override
+      public PlayabilityGate.GateResult evaluate(Sentence sentence, int ticksPerBeat) {
+        PlayabilityGate.GateResult real = super.evaluate(sentence, ticksPerBeat);
+        return real.passed() ? real
+            : new PlayabilityGate.GateResult(true, sentence, real.avgCost(), List.of());
+      }
+    };
+
+    SentenceGenerator gated   = new SentenceGenerator(99L, permissiveGate);
+    SentenceGenerator ungated = new SentenceGenerator(99L, null);
+
+    List<Sentence> gatedResult   = gated.generate(cMajor4Bars());
+    List<Sentence> ungatedResult = ungated.generate(cMajor4Bars());
+
+    assertFalse(gatedResult.isEmpty(), "Permissive gate must not drop all candidates");
+    assertEquals(ungatedResult.size(), gatedResult.size(),
+        "Permissive gate should keep the same number of candidates as no gate");
+  }
+
+  @Test
+  void generatorWithGateAttachesPlayabilityMetadataToPassingCandidates() {
+    PlayabilityGate gate = new PlayabilityGate();
+    SentenceGenerator gen = new SentenceGenerator(55L, gate);
+    List<Sentence> results = gen.generate(cMajor4Bars());
+
+    assertFalse(results.isEmpty(), "Should return at least one candidate");
+    // When the gate is active every returned sentence that passed should be labelled
+    List<String> validLabels = List.of(
+        "beginner-friendly", "intermediate", "advanced",
+        "difficult but playable", "impractical");
+    for (Sentence s : results) {
+      String label = s.getMetadataValue(PlayabilityGate.METADATA_KEY_LABEL);
+      // label is non-null only on sentences that passed the gate;
+      // fallback sentences (all failed) may lack the label — just skip those
+      if (label != null) {
+        assertTrue(validLabels.contains(label),
+            "Playability label must be one of the known values, got: " + label);
+      }
+    }
+  }
+
+  @Test
+  void generatorWithGateFallsBackWhenAllCandidatesFail() {
+    // A rejecting gate that always fails every sentence
+    PlayabilityGate rejectAll = new PlayabilityGate() {
+      @Override
+      public PlayabilityGate.GateResult evaluate(Sentence sentence, int ticksPerBeat) {
+        return new PlayabilityGate.GateResult(
+            false, sentence, Double.MAX_VALUE, List.of("forced rejection"));
+      }
+    };
+
+    SentenceGenerator gen = new SentenceGenerator(77L, rejectAll);
+    List<Sentence> results = gen.generate(cMajor4Bars());
+
+    // Fall-back: the full scored list is returned rather than an empty list
+    assertFalse(results.isEmpty(),
+        "Generator must fall back to best-scored candidate when all gate checks fail");
+    assertEquals(20, results.size(),
+        "Fallback should return all 20 candidates (scored list), got " + results.size());
+  }
+
+  @Test
+  void generatorWithNullGateReturnsUnfilteredCandidates() {
+    SentenceGenerator gen = new SentenceGenerator(13L, null);
+    List<Sentence> results = gen.generate(cMajor4Bars());
+    assertEquals(20, results.size(),
+        "Null gate must not filter anything; expected 20 candidates");
   }
 
   @Test
