@@ -3,6 +3,7 @@ package com.motifgen;
 import com.motifgen.exporter.MidiExporter;
 import com.motifgen.exporter.MusicXMLExporter;
 import com.motifgen.generator.SentenceGenerator;
+import com.motifgen.guitar.PlayabilityGate;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
@@ -129,7 +130,7 @@ public class MotifGen {
 
         // 4. Generate sentence candidates
         System.out.println("\nGenerating sentence candidates...");
-        SentenceGenerator generator = new SentenceGenerator();
+        SentenceGenerator generator = new SentenceGenerator(System.nanoTime(), new PlayabilityGate());
         List<Sentence> candidates = generator.generate(motif, profile);
         System.out.println("  Generated " + candidates.size() + " candidates");
 
