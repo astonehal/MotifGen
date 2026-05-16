@@ -14,7 +14,7 @@ import java.util.List;
  * are recorded with human-readable descriptions. When a sentence passes, the playability
  * label is attached to the sentence's metadata.
  */
-public final class PlayabilityGate {
+public class PlayabilityGate {
 
   /** Average cost above which a melody is considered impractical and rejected. */
   public static final double REJECTION_THRESHOLD = 5.0;
