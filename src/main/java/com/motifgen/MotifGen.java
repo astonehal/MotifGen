@@ -4,6 +4,8 @@ import com.motifgen.exporter.MidiExporter;
 import com.motifgen.exporter.MusicXMLExporter;
 import com.motifgen.generator.SentenceGenerator;
 import com.motifgen.guitar.PlayabilityGate;
+import com.motifgen.guitar.backing.BackingTrack;
+import com.motifgen.guitar.backing.BackingTrackGenerator;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
@@ -177,7 +179,8 @@ public class MotifGen {
 
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
-                MidiExporter.export(sentence, midFile, tempo);
+                BackingTrack backing = BackingTrackGenerator.generate(sentence, profile);
+                MidiExporter.export(sentence, backing, midFile, tempo);
                 System.out.println("    Exported MIDI to: " + midFile.getAbsolutePath());
             }
 
