@@ -109,7 +109,7 @@ public final class AnnealingRefiner {
     switch (weakest) {
       case REPETITION -> applyRepetitionMutation(phrases, phraseIdx, notes, soundingIdx, rng);
       case CONTOUR -> applyContourMutation(notes, soundingIdx, key, rng);
-      case COMPACTNESS -> applyCompactnessMutation(notes, soundingIdx);
+      case COMPACTNESS -> applyCompactnessMutation(notes, soundingIdx, key);
       case RHYTHM -> applyRhythmMutation(notes, soundingIdx, rng, profile);
       case CONVENTIONALITY -> applyConventionalityMutation(notes, soundingIdx, key, rng);
       case HOOK -> applyHookMutation(notes, soundingIdx, rng);
@@ -150,7 +150,8 @@ public final class AnnealingRefiner {
         orig.durationTicks(), orig.velocity()));
   }
 
-  private void applyCompactnessMutation(List<Note> notes, List<Integer> soundingIdx) {
+  private void applyCompactnessMutation(List<Note> notes, List<Integer> soundingIdx,
+      KeySignature key) {
     int mean = 0;
     for (int idx : soundingIdx) mean += notes.get(idx).pitch();
     mean /= soundingIdx.size();
@@ -166,7 +167,9 @@ public final class AnnealingRefiner {
     }
     Note target = notes.get(worstIdx);
     int shift = target.pitch() > mean ? -12 : 12;
-    int newPitch = Math.max(0, Math.min(127, target.pitch() + shift));
+    int shifted = Math.max(0, Math.min(127, target.pitch() + shift));
+    // Snap to nearest in-key pitch so octave shifts don't introduce accidentals
+    int newPitch = nearestInKey(shifted, key);
     notes.set(worstIdx, new Note(newPitch, target.startTick(),
         target.durationTicks(), target.velocity()));
   }

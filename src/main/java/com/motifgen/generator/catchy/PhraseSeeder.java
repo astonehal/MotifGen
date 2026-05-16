@@ -85,7 +85,7 @@ public final class PhraseSeeder {
     return switch (choice) {
       case TRANSPOSE_FIFTH_UP    -> transformer.diatonicTranspose(motif,  step + 3, key);
       case TRANSPOSE_FOURTH_DOWN -> transformer.diatonicTranspose(motif, -(step + 2), key);
-      case INVERT                -> transformer.invert(motif, firstSoundingPitch(motif));
+      case INVERT                -> transformer.apply(MotifTransformer.Op.INVERT, motif, key);
     };
   }
 
@@ -127,10 +127,4 @@ public final class PhraseSeeder {
     return Math.max(0, Math.min(127, chosen));
   }
 
-  private static int firstSoundingPitch(Motif motif) {
-    for (Note n : motif.getNotes()) {
-      if (!n.isRest()) return n.pitch();
-    }
-    return 60;
-  }
 }

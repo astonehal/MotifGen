@@ -21,7 +21,7 @@ public final class ClimaxPlacer {
   private static final int DEFAULT_LIFT_SEMITONES = 3;
   private static final int MIN_LIFT_SEMITONES     = 1;
   private static final int MAX_LIFT_SEMITONES     = 7;
-  private static final int MAX_PITCH              = 100;
+  private static final int MAX_PITCH              = 84; // C6 — top of comfortable melodic range
 
   /** Backward-compatible overload — uses the default lift of 3 semitones. */
   public Motif enforceClimax(Motif motif, int climaxIndex, KeySignature key) {

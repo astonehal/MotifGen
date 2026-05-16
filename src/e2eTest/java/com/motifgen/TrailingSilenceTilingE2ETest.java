@@ -263,6 +263,9 @@ class TrailingSilenceTilingE2ETest {
           if (!(event.getMessage() instanceof ShortMessage sm)) continue;
           if (sm.getCommand() != ShortMessage.NOTE_ON) continue;
           if (sm.getData2() == 0) continue;
+          // Only check melody channel (channel 0); backing guitar (channel 1) may
+          // legitimately place notes throughout the bar to fill rhythmic gaps.
+          if (sm.getChannel() != 0) continue;
           long tick = event.getTick();
           if (tick < 7680L) {
             assertTrue(tick <= phantomBoundaryTick,

@@ -48,7 +48,7 @@ public final class MotifTransformer {
     return switch (op) {
       case INVERT -> {
         int pivot = firstSoundingPitch(motif);
-        yield invert(motif, pivot);
+        yield invertInKey(motif, pivot, key);
       }
       case RETROGRADE -> retrograde(motif);
       case DIATONIC_UP_2 -> diatonicTranspose(motif, 2, key);
@@ -73,6 +73,24 @@ public final class MotifTransformer {
         out.add(n);
       } else {
         int newPitch = shiftBySteps(n.pitch(), scaleSteps, key);
+        out.add(new Note(newPitch, n.startTick(), n.durationTicks(), n.velocity()));
+      }
+    }
+    return new Motif(out, motif.getBars(), motif.getBeatsPerBar(), motif.getTicksPerBeat());
+  }
+
+  /**
+   * Mirrors every sounding pitch around {@code pivotPitch} and snaps the result
+   * to the nearest in-key pitch. Rests are preserved.
+   */
+  public Motif invertInKey(Motif motif, int pivotPitch, KeySignature key) {
+    List<Note> out = new ArrayList<>();
+    for (Note n : motif.getNotes()) {
+      if (n.isRest()) {
+        out.add(n);
+      } else {
+        int raw = Math.max(0, Math.min(127, 2 * pivotPitch - n.pitch()));
+        int newPitch = nearestInKey(raw, key);
         out.add(new Note(newPitch, n.startTick(), n.durationTicks(), n.velocity()));
       }
     }

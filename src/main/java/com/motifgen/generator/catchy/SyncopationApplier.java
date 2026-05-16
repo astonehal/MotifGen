@@ -30,6 +30,15 @@ public final class SyncopationApplier {
 
   private SyncopationApplier() {}
 
+  private static int nextSoundingIndex(List<Integer> soundingIdx, int currentNoteIdx) {
+    boolean found = false;
+    for (int si : soundingIdx) {
+      if (found) return si;
+      if (si == currentNoteIdx) found = true;
+    }
+    return -1;
+  }
+
   /**
    * Returns a new motif with syncopation applied according to the profile.
    *
@@ -67,6 +76,10 @@ public final class SyncopationApplier {
       Note n = notes.get(idx);
       long newStart = n.startTick() + shift;
       long newDur   = n.durationTicks() - shift;
+
+      // Skip if the shift would collide with the next sounding note's start tick.
+      int nextIdx = nextSoundingIndex(soundingIdx, idx);
+      if (nextIdx >= 0 && newStart >= notes.get(nextIdx).startTick()) continue;
 
       // Clamp: newStart must be < phraseEnd; newDur >= 1
       newStart = Math.min(newStart, phraseEnd - 1);
