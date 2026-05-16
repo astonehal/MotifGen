@@ -179,7 +179,7 @@ public class MotifGen {
 
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
-                BackingTrack backing = BackingTrackGenerator.generate(sentence, profile);
+                BackingTrack backing = BackingTrackGenerator.generate(sentence, profile, tempo);
                 MidiExporter.export(sentence, backing, midFile, tempo);
                 System.out.println("    Exported MIDI to: " + midFile.getAbsolutePath());
             }

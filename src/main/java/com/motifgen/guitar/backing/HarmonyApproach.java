@@ -24,11 +24,10 @@ public enum HarmonyApproach {
   FUNCTIONAL_DIATONIC {
     @Override
     public List<ChordSlot> generateChords(
-        List<Note> melody, KeySignature key, SentimentProfile sentiment) {
+        List<Note> melody, KeySignature key, SentimentProfile sentiment, long declaredTotalTicks) {
       if (melody.isEmpty()) return List.of();
 
-      long totalTicks = melody.stream().mapToLong(Note::endTick).max().orElse(0);
-      long slotSize = computeSlotSize(totalTicks, 4);
+      long slotSize = computeSlotSize(declaredTotalTicks, 4);
 
       // Build the 6 diatonic triads (I ii iii IV V vi) in the key
       int[] scale = key.scaleDegrees();
@@ -38,8 +37,8 @@ public enum HarmonyApproach {
       List<Integer> prevChord = null;
       for (int i = 0; i < 4; i++) {
         long start = i * slotSize;
-        long end = Math.min(start + slotSize, totalTicks);
-        if (start >= totalTicks) break;
+        long end = Math.min(start + slotSize, declaredTotalTicks);
+        if (start >= declaredTotalTicks) break;
 
         // Find the strong-beat melody note for this slot
         final long slotStart = start;
@@ -65,21 +64,20 @@ public enum HarmonyApproach {
   MODAL_COLOUR {
     @Override
     public List<ChordSlot> generateChords(
-        List<Note> melody, KeySignature key, SentimentProfile sentiment) {
+        List<Note> melody, KeySignature key, SentimentProfile sentiment, long declaredTotalTicks) {
       if (melody.isEmpty()) return List.of();
 
-      long totalTicks = melody.stream().mapToLong(Note::endTick).max().orElse(0);
-      long slotSize = computeSlotSize(totalTicks, 4);
+      long slotSize = computeSlotSize(declaredTotalTicks, 4);
       int[] scale = key.scaleDegrees();
       int[][] triads = buildDiatonicTriads(scale);
 
       List<ChordSlot> slots = new ArrayList<>();
       for (int i = 0; i < 4; i++) {
         long start = i * slotSize;
-        if (start >= totalTicks) break;
+        if (start >= declaredTotalTicks) break;
 
         final long slotStart = start;
-        final long slotEnd = Math.min(start + slotSize, totalTicks);
+        final long slotEnd = Math.min(start + slotSize, declaredTotalTicks);
         Note strongBeat = findStrongBeatNote(melody, slotStart, slotEnd);
         int targetPc = strongBeat != null ? strongBeat.pitchClass() : key.root();
 
@@ -105,11 +103,10 @@ public enum HarmonyApproach {
   STATIC_PEDAL {
     @Override
     public List<ChordSlot> generateChords(
-        List<Note> melody, KeySignature key, SentimentProfile sentiment) {
+        List<Note> melody, KeySignature key, SentimentProfile sentiment, long declaredTotalTicks) {
       if (melody.isEmpty()) return List.of();
 
-      long totalTicks = melody.stream().mapToLong(Note::endTick).max().orElse(0);
-      long slotSize = computeSlotSize(totalTicks, 4);
+      long slotSize = computeSlotSize(declaredTotalTicks, 4);
 
       // Tonic triad: root, third (major=4 or minor=3 semitones), fifth
       int root = key.root();
@@ -120,7 +117,7 @@ public enum HarmonyApproach {
       List<ChordSlot> slots = new ArrayList<>();
       for (int i = 0; i < 4; i++) {
         long start = i * slotSize;
-        if (start >= totalTicks) break;
+        if (start >= declaredTotalTicks) break;
         slots.add(new ChordSlot(start, slotSize, tonic));
       }
       return slots;
@@ -133,11 +130,10 @@ public enum HarmonyApproach {
   JAZZ_SHELL {
     @Override
     public List<ChordSlot> generateChords(
-        List<Note> melody, KeySignature key, SentimentProfile sentiment) {
+        List<Note> melody, KeySignature key, SentimentProfile sentiment, long declaredTotalTicks) {
       if (melody.isEmpty()) return List.of();
 
-      long totalTicks = melody.stream().mapToLong(Note::endTick).max().orElse(0);
-      long slotSize = computeSlotSize(totalTicks, 4);
+      long slotSize = computeSlotSize(declaredTotalTicks, 4);
 
       int root = key.root();
       // ii7: root+2, +(minor3rd), +(7th from ii root) = root+2, root+5, root+12
@@ -153,7 +149,7 @@ public enum HarmonyApproach {
       List<ChordSlot> slots = new ArrayList<>();
       for (int i = 0; i < 4; i++) {
         long start = i * slotSize;
-        if (start >= totalTicks) break;
+        if (start >= declaredTotalTicks) break;
         slots.add(new ChordSlot(start, slotSize, progression.get(i)));
       }
       return slots;
@@ -167,20 +163,19 @@ public enum HarmonyApproach {
   IMPLIED_HARMONY {
     @Override
     public List<ChordSlot> generateChords(
-        List<Note> melody, KeySignature key, SentimentProfile sentiment) {
+        List<Note> melody, KeySignature key, SentimentProfile sentiment, long declaredTotalTicks) {
       if (melody.isEmpty()) return List.of();
 
-      long totalTicks = melody.stream().mapToLong(Note::endTick).max().orElse(0);
-      long slotSize = computeSlotSize(totalTicks, 4);
+      long slotSize = computeSlotSize(declaredTotalTicks, 4);
       int[] scale = key.scaleDegrees();
       int[][] triads = buildDiatonicTriads(scale);
 
       List<ChordSlot> slots = new ArrayList<>();
       for (int i = 0; i < 4; i++) {
         long start = i * slotSize;
-        if (start >= totalTicks) break;
+        if (start >= declaredTotalTicks) break;
         final long slotStart = start;
-        final long slotEnd = Math.min(start + slotSize, totalTicks);
+        final long slotEnd = Math.min(start + slotSize, declaredTotalTicks);
 
         // Collect pitch classes in this segment
         List<Integer> segmentPcs = melody.stream()
@@ -217,15 +212,27 @@ public enum HarmonyApproach {
   // -----------------------------------------------------------------------
 
   /**
-   * Generates chord slots covering the melodic timeline.
+   * Generates chord slots covering the melodic timeline using the declared sentence duration.
    *
-   * @param melody    all melody notes in time order
-   * @param key       key signature of the piece
-   * @param sentiment sentiment profile (may influence chord quality)
+   * @param melody              all melody notes in time order
+   * @param key                 key signature of the piece
+   * @param sentiment           sentiment profile (may influence chord quality)
+   * @param declaredTotalTicks  declared sentence duration (phrase count × bars × ticks-per-bar);
+   *                            use this instead of max(endTick) to keep slots on bar boundaries
    * @return list of chord slots, never null
    */
   public abstract List<ChordSlot> generateChords(
-      List<Note> melody, KeySignature key, SentimentProfile sentiment);
+      List<Note> melody, KeySignature key, SentimentProfile sentiment, long declaredTotalTicks);
+
+  /**
+   * Backward-compatible 3-argument overload. Derives total ticks from the note list; prefer
+   * the 4-argument form when the declared sentence duration is available.
+   */
+  public final List<ChordSlot> generateChords(
+      List<Note> melody, KeySignature key, SentimentProfile sentiment) {
+    long totalTicks = melody.stream().mapToLong(Note::endTick).max().orElse(0);
+    return generateChords(melody, key, sentiment, totalTicks);
+  }
 
   // -----------------------------------------------------------------------
   // Shared helpers (package-private for testability)
