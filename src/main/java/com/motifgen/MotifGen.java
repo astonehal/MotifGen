@@ -6,6 +6,8 @@ import com.motifgen.generator.SentenceGenerator;
 import com.motifgen.guitar.PlayabilityGate;
 import com.motifgen.guitar.backing.BackingTrack;
 import com.motifgen.guitar.backing.BackingTrackGenerator;
+import com.motifgen.guitar.backing.BassTrack;
+import com.motifgen.guitar.backing.BassTrackGenerator;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
@@ -177,16 +179,18 @@ public class MotifGen {
             System.out.printf("    TOTAL:                   %.1f / 100  [%s]%n",
                     bd.total(), SentenceScorer.bandLabel(bd.total()));
 
+            BackingTrack backing = BackingTrackGenerator.generate(sentence, profile, tempo);
+            BassTrack bass = BassTrackGenerator.generate(sentence, profile, tempo);
+
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
-                BackingTrack backing = BackingTrackGenerator.generate(sentence, profile, tempo);
-                MidiExporter.export(sentence, backing, midFile, tempo);
+                MidiExporter.export(sentence, backing, bass, midFile, tempo);
                 System.out.println("    Exported MIDI to: " + midFile.getAbsolutePath());
             }
 
             if (format == OutputFormat.MUSICXML || format == OutputFormat.BOTH) {
                 File xmlFile = new File(outDir, baseName + ".musicxml");
-                MusicXMLExporter.export(sentence, xmlFile, tempo);
+                MusicXMLExporter.export(sentence, backing, bass, xmlFile, tempo);
                 System.out.println("    Exported MusicXML to: " + xmlFile.getAbsolutePath());
             }
         }

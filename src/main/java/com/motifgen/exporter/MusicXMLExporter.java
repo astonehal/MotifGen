@@ -1,5 +1,8 @@
 package com.motifgen.exporter;
 
+import com.motifgen.guitar.backing.BackingTrack;
+import com.motifgen.guitar.backing.BassTrack;
+import com.motifgen.guitar.backing.ChanneledNote;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
@@ -172,6 +175,194 @@ public class MusicXMLExporter {
 
     public static void export(Sentence sentence, File outputFile) throws Exception {
         export(sentence, outputFile, DEFAULT_TEMPO_BPM);
+    }
+
+    /**
+     * Exports a 3-part MusicXML file: melody (P1), rhythm guitar (P2, program 25),
+     * and bass guitar (P3, program 34).
+     *
+     * @param sentence   the melody sentence
+     * @param backing    the rhythm guitar backing track
+     * @param bass       the bass guitar track
+     * @param outputFile destination MusicXML file
+     * @param tempoBpm   tempo in beats per minute
+     * @throws Exception if XML I/O fails
+     */
+    public static void export(Sentence sentence, BackingTrack backing, BassTrack bass,
+            File outputFile, int tempoBpm) throws Exception {
+        Motif firstPhrase = sentence.getPhrases().getFirst();
+        int ticksPerBeat = firstPhrase.getTicksPerBeat();
+        int beatsPerBar = firstPhrase.getBeatsPerBar();
+        int divisions = ticksPerBeat;
+
+        Document doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+
+        Element scorePartwise = doc.createElement("score-partwise");
+        scorePartwise.setAttribute("version", "4.0");
+        doc.appendChild(scorePartwise);
+
+        Element work = appendElement(doc, scorePartwise, "work");
+        appendTextElement(doc, work, "work-title",
+                "MotifGen: " + sentence.getKeyName() + " (" + sentence.getStructure() + ")");
+
+        Element identification = appendElement(doc, scorePartwise, "identification");
+        Element creator = appendTextElement(doc, identification, "creator", "MotifGen");
+        creator.setAttribute("type", "software");
+
+        // Part list — 3 parts
+        Element partList = appendElement(doc, scorePartwise, "part-list");
+
+        Element sp1 = appendElement(doc, partList, "score-part");
+        sp1.setAttribute("id", "P1");
+        appendTextElement(doc, sp1, "part-name", "Melody");
+
+        Element sp2 = appendElement(doc, partList, "score-part");
+        sp2.setAttribute("id", "P2");
+        appendTextElement(doc, sp2, "part-name", "Rhythm Guitar");
+        Element si2 = appendElement(doc, sp2, "score-instrument");
+        si2.setAttribute("id", "P2-I1");
+        appendTextElement(doc, si2, "instrument-name", "Acoustic Guitar");
+        Element mp2 = appendElement(doc, sp2, "midi-instrument");
+        mp2.setAttribute("id", "P2-I1");
+        appendTextElement(doc, mp2, "midi-program", "25");
+
+        Element sp3 = appendElement(doc, partList, "score-part");
+        sp3.setAttribute("id", "P3");
+        appendTextElement(doc, sp3, "part-name", "Bass Guitar");
+        Element si3 = appendElement(doc, sp3, "score-instrument");
+        si3.setAttribute("id", "P3-I1");
+        appendTextElement(doc, si3, "instrument-name", "Electric Bass");
+        Element mp3 = appendElement(doc, sp3, "midi-instrument");
+        mp3.setAttribute("id", "P3-I1");
+        appendTextElement(doc, mp3, "midi-program", "34");
+
+        int totalBars = sentence.totalBars();
+        long ticksPerBar = (long) beatsPerBar * ticksPerBeat;
+
+        // --- P1: Melody ---
+        Element melodyPart = appendElement(doc, scorePartwise, "part");
+        melodyPart.setAttribute("id", "P1");
+        List<Note> melodyNotes = sentence.getAllNotes();
+        writeMeasures(doc, melodyPart, melodyNotes, totalBars, ticksPerBar, ticksPerBeat,
+                beatsPerBar, divisions, tempoBpm, sentence.getKeyName(), null);
+
+        // --- P2: Rhythm Guitar ---
+        Element guitarPart = appendElement(doc, scorePartwise, "part");
+        guitarPart.setAttribute("id", "P2");
+        List<Note> guitarNotes = backing.notes().stream()
+                .map(ChanneledNote::note).toList();
+        writeMeasures(doc, guitarPart, guitarNotes, totalBars, ticksPerBar, ticksPerBeat,
+                beatsPerBar, divisions, tempoBpm, sentence.getKeyName(), null);
+
+        // --- P3: Bass Guitar ---
+        Element bassPart = appendElement(doc, scorePartwise, "part");
+        bassPart.setAttribute("id", "P3");
+        List<Note> bassNotes = bass.notes().stream()
+                .map(ChanneledNote::note).toList();
+        writeMeasures(doc, bassPart, bassNotes, totalBars, ticksPerBar, ticksPerBeat,
+                beatsPerBar, divisions, tempoBpm, sentence.getKeyName(), "F");
+
+        Transformer transformer = TransformerFactory.newInstance().newTransformer();
+        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+        transformer.setOutputProperty(OutputKeys.DOCTYPE_PUBLIC,
+                "-//Recordare//DTD MusicXML 4.0 Partwise//EN");
+        transformer.setOutputProperty(OutputKeys.DOCTYPE_SYSTEM,
+                "http://www.musicxml.org/dtds/partwise.dtd");
+        transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+        transformer.transform(new DOMSource(doc), new StreamResult(outputFile));
+    }
+
+    /**
+     * Writes measure elements for one part into {@code partElem}.
+     *
+     * @param clefSign "G" for treble, "F" for bass, or {@code null} to default to "G"
+     */
+    private static void writeMeasures(Document doc, Element partElem, List<Note> notes,
+            int totalBars, long ticksPerBar, int ticksPerBeat, int beatsPerBar,
+            int divisions, int tempoBpm, String keyName, String clefSign) {
+
+        String clef = (clefSign != null) ? clefSign : "G";
+        String clefLine = "F".equals(clef) ? "4" : "2";
+
+        for (int bar = 0; bar < totalBars; bar++) {
+            Element measure = appendElement(doc, partElem, "measure");
+            measure.setAttribute("number", String.valueOf(bar + 1));
+
+            if (bar == 0) {
+                Element attributes = appendElement(doc, measure, "attributes");
+                appendTextElement(doc, attributes, "divisions", String.valueOf(divisions));
+
+                Element key = appendElement(doc, attributes, "key");
+                KeyInfo keyInfo = parseKeyName(keyName);
+                appendTextElement(doc, key, "fifths", String.valueOf(keyInfo.fifths));
+                appendTextElement(doc, key, "mode", keyInfo.mode);
+
+                Element time = appendElement(doc, attributes, "time");
+                appendTextElement(doc, time, "beats", String.valueOf(beatsPerBar));
+                appendTextElement(doc, time, "beat-type", "4");
+
+                Element clefElem = appendElement(doc, attributes, "clef");
+                appendTextElement(doc, clefElem, "sign", clef);
+                appendTextElement(doc, clefElem, "line", clefLine);
+
+                Element direction = appendElement(doc, measure, "direction");
+                direction.setAttribute("placement", "above");
+                Element dirType = appendElement(doc, direction, "direction-type");
+                Element metronome = appendElement(doc, dirType, "metronome");
+                appendTextElement(doc, metronome, "beat-unit", "quarter");
+                appendTextElement(doc, metronome, "per-minute", String.valueOf(tempoBpm));
+                Element sound = appendElement(doc, direction, "sound");
+                sound.setAttribute("tempo", String.valueOf(tempoBpm));
+            }
+
+            long barStart = bar * ticksPerBar;
+            long barEnd = barStart + ticksPerBar;
+            long cursor = barStart;
+
+            for (Note note : notes) {
+                if (note.endTick() <= barStart || note.startTick() >= barEnd) continue;
+
+                long noteStart = Math.max(note.startTick(), barStart);
+                if (noteStart > cursor) {
+                    addRest(doc, measure, noteStart - cursor, divisions);
+                }
+
+                if (note.isRest()) {
+                    long dur = Math.min(note.endTick(), barEnd) - noteStart;
+                    addRest(doc, measure, dur, divisions);
+                    cursor = noteStart + dur;
+                    continue;
+                }
+
+                long effectiveEnd = Math.min(note.endTick(), barEnd);
+                long duration = effectiveEnd - noteStart;
+                if (duration <= 0) continue;
+
+                Element noteElem = appendElement(doc, measure, "note");
+                Element pitch = appendElement(doc, noteElem, "pitch");
+                int pc = note.pitch() % 12;
+                appendTextElement(doc, pitch, "step", STEPS[pc]);
+                if (ALTERS[pc] != 0) {
+                    appendTextElement(doc, pitch, "alter", String.valueOf(ALTERS[pc]));
+                }
+                int octave = note.pitch() / 12 - 1;
+                appendTextElement(doc, pitch, "octave", String.valueOf(octave));
+                appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
+                String type = ticksToType(duration, divisions);
+                if (type != null) {
+                    appendTextElement(doc, noteElem, "type", type);
+                }
+                Element dynamics = appendElement(doc, noteElem, "dynamics");
+                appendTextElement(doc, dynamics, "other-dynamics",
+                        String.valueOf(Math.round(note.velocity() / 127.0 * 100)));
+
+                cursor = effectiveEnd;
+            }
+
+            if (cursor < barEnd) {
+                addRest(doc, measure, barEnd - cursor, divisions);
+            }
+        }
     }
 
     private static void addRest(Document doc, Element measure, long durationTicks, int divisions) {

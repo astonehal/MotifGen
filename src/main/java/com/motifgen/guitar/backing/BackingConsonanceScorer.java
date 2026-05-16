@@ -74,6 +74,69 @@ public final class BackingConsonanceScorer {
     return Math.max(0.0, Math.min(100.0, raw * 100.0));
   }
 
+  /**
+   * Computes a normalised consonance score (0–100) that includes bass notes.
+   *
+   * <p>Guitar (voiced chord) notes contribute weight 1.0 per beat; bass notes
+   * contribute weight 0.5 per beat.  The scoring logic is otherwise identical
+   * to {@link #score(List, List, int)}.
+   *
+   * @param voicedChords  voiced guitar chords
+   * @param melodyNotes   melody notes in time order
+   * @param bassNotes     bass notes from {@link BassTrack}
+   * @param ppq           ticks per quarter note
+   * @return consonance score 0–100
+   */
+  public static double scoreWithBass(
+      List<VoicedChord> voicedChords,
+      List<Note> melodyNotes,
+      List<BassNote> bassNotes,
+      int ppq) {
+
+    if (melodyNotes.isEmpty()) return 0.0;
+
+    double weightedSum = 0.0;
+    double totalWeight = 0.0;
+
+    // Guitar notes — weight 1.0
+    for (VoicedChord vc : voicedChords) {
+      List<Note> concurrent = concurrentMelodyNotes(vc, melodyNotes);
+      if (concurrent.isEmpty()) continue;
+      for (Note chordNote : vc.notes()) {
+        if (chordNote.isRest()) continue;
+        for (Note melodyNote : concurrent) {
+          if (melodyNote.isRest()) continue;
+          double beatStrength = beatStrength(melodyNote.startTick(), ppq);
+          int interval = intervalClass(chordNote.pitch(), melodyNote.pitch());
+          double consonance = CONSONANCE_TABLE.getOrDefault(interval, 0.5);
+          weightedSum += consonance * beatStrength * 1.0;
+          totalWeight += beatStrength * 1.0;
+        }
+      }
+    }
+
+    // Bass notes — weight 0.5
+    for (BassNote bassNote : bassNotes) {
+      List<Note> concurrent = melodyNotes.stream()
+          .filter(n -> !n.isRest()
+              && n.startTick() < bassNote.startTick() + bassNote.durationTicks()
+              && n.endTick() > bassNote.startTick())
+          .toList();
+      for (Note melodyNote : concurrent) {
+        if (melodyNote.isRest()) continue;
+        double beatStrength = beatStrength(melodyNote.startTick(), ppq);
+        int interval = intervalClass(bassNote.midi(), melodyNote.pitch());
+        double consonance = CONSONANCE_TABLE.getOrDefault(interval, 0.5);
+        weightedSum += consonance * beatStrength * 0.5;
+        totalWeight += beatStrength * 0.5;
+      }
+    }
+
+    if (totalWeight == 0.0) return 50.0;
+    double raw = weightedSum / totalWeight;
+    return Math.max(0.0, Math.min(100.0, raw * 100.0));
+  }
+
   // -----------------------------------------------------------------------
   // Private helpers
   // -----------------------------------------------------------------------
