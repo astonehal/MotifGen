@@ -181,7 +181,7 @@ public class SentenceGenerator {
     if (!immutableIndices.contains(finalPhraseIdx)) {
       refined = forceFinalNoteToTonic(refined, key, finalPhraseIdx);
     }
-    return refined;
+    return clampPitchRange(refined, 48, 84);
   }
 
   private static Sentence forceFinalNoteToTonic(Sentence sentence, KeySignature key,
@@ -267,6 +267,28 @@ public class SentenceGenerator {
           original.getBeatsPerBar(), original.getTicksPerBeat()));
     }
     return split;
+  }
+
+  private static Sentence clampPitchRange(Sentence sentence, int minPitch, int maxPitch) {
+    List<Motif> clamped = new ArrayList<>();
+    for (Motif phrase : sentence.getPhrases()) {
+      List<Note> notes = new ArrayList<>();
+      for (Note n : phrase.getNotes()) {
+        if (n.isRest()) {
+          notes.add(n);
+        } else {
+          int pitch = n.pitch();
+          while (pitch > maxPitch && pitch - 12 >= minPitch) pitch -= 12;
+          while (pitch < minPitch && pitch + 12 <= maxPitch) pitch += 12;
+          pitch = Math.max(minPitch, Math.min(maxPitch, pitch));
+          notes.add(new Note(pitch, n.startTick(), n.durationTicks(), n.velocity()));
+        }
+      }
+      clamped.add(new Motif(notes, phrase.getBars(), phrase.getBeatsPerBar(),
+          phrase.getTicksPerBeat()));
+    }
+    return new Sentence(clamped, sentence.getStructure(), sentence.getKeyName(),
+        sentence.getScore());
   }
 
   private static String structureStringFor(String template) {

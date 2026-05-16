@@ -44,7 +44,15 @@ public class MidiLoader {
                 })
                 .toList();
 
-        return new Motif(trimmed, bars, beatsPerBar, ticksPerBeat);
+        // Use the actual note content to determine bar count so that a short file
+        // (e.g. 1-bar motif) is loaded with bars=1 rather than the caller's requested
+        // bars=4. This lets MotifLengthMatcher tile the motif up to phrase length.
+        long lastNoteTick = trimmed.stream().mapToLong(Note::endTick).max().orElse(0L);
+        int actualBars = (int) Math.max(1,
+                (lastNoteTick + ticksPerBar - 1) / ticksPerBar);
+        int useBars = Math.min(bars, actualBars);
+
+        return new Motif(trimmed, useBars, beatsPerBar, ticksPerBeat);
     }
 
     private static List<Note> extractNotes(Sequence sequence, int ticksPerBeat) {

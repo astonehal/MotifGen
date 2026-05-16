@@ -9,11 +9,14 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Evaluates all combinations of {@link HarmonyApproach} (5) ×
- * {@link VoicingType} (6) = 30 candidates and returns the {@link BackingTrack}
- * with the highest combined score.
+ * Evaluates all five {@link HarmonyApproach} values against a sentiment-driven
+ * {@link VoicingType} and returns the {@link BackingTrack} with the highest
+ * combined score.
  *
- * <p>Combined score formula: {@code 0.5 × consonance + 0.5 × catchiness}.
+ * <p>Voicing is selected once from the {@link SentimentProfile} (not through
+ * scoring) to prevent low-complexity voicings (e.g. power chords) from
+ * dominating the consonance metric. The five harmony approaches then compete
+ * through the combined score formula: {@code 0.5 × consonance + 0.5 × catchiness}.
  */
 public final class BackingTrackSelector {
 
@@ -24,7 +27,10 @@ public final class BackingTrackSelector {
   private BackingTrackSelector() {}
 
   /**
-   * Selects the best backing track from all approach × voicing combinations.
+   * Selects the best backing track.
+   *
+   * <p>The voicing type is derived from the sentiment profile; the five
+   * harmony approaches then compete via combined score.
    *
    * @param sentence  the melody sentence
    * @param profile   sentiment profile
@@ -37,26 +43,30 @@ public final class BackingTrackSelector {
     List<Note> melodyNotes = sentence.getAllNotes();
     long sentenceTotalTicks = (long) ppq * BEATS_PER_BAR * sentence.totalBars();
 
+    // One chord change per bar; minimum 4 slots so short sentences still vary.
+    int numSlots = Math.max(4, sentence.totalBars());
+
+    // Voicing chosen from sentiment — not through scoring — so that simple
+    // voicings (POWER) don't dominate the consonance calculation.
+    VoicingType voicing = selectVoicingBySentiment(profile);
+
     BackingTrack best = null;
     double bestScore = Double.NEGATIVE_INFINITY;
 
     for (HarmonyApproach approach : HarmonyApproach.values()) {
-      for (VoicingType voicing : VoicingType.values()) {
-        try {
-          BackingTrack candidate = evaluate(
-              sentence, profile, key, melodyNotes, approach, voicing, ppq,
-              tempoBpm, sentenceTotalTicks);
-          if (candidate.combinedScore() > bestScore) {
-            bestScore = candidate.combinedScore();
-            best = candidate;
-          }
-        } catch (Exception ignored) {
-          // Skip invalid combinations (e.g. voicing produces no playable notes)
+      try {
+        BackingTrack candidate = evaluate(
+            sentence, profile, key, melodyNotes, approach, voicing, ppq,
+            tempoBpm, sentenceTotalTicks, numSlots);
+        if (candidate.combinedScore() > bestScore) {
+          bestScore = candidate.combinedScore();
+          best = candidate;
         }
+      } catch (Exception ignored) {
+        // Skip invalid combinations (e.g. voicing produces no playable notes)
       }
     }
 
-    // Fallback: shouldn't happen, but guard against all-empty results
     if (best == null) {
       best = new BackingTrack(List.of(), BackingTrack.GUITAR_PROGRAM, 0.0);
     }
@@ -72,6 +82,30 @@ public final class BackingTrackSelector {
   // Private helpers
   // -----------------------------------------------------------------------
 
+  /**
+   * Maps a sentiment profile to an appropriate voicing type.
+   *
+   * <ul>
+   *   <li>TENSE / ANGRY (high arousal, low valence) → POWER</li>
+   *   <li>EXCITED (high arousal, positive valence) → BARRE</li>
+   *   <li>HAPPY (medium-high arousal, positive valence) → OPEN</li>
+   *   <li>CONTENT / medium energy → TRIAD</li>
+   *   <li>RELAXED / CONTENT (low arousal, positive) → JAZZ</li>
+   *   <li>SAD / GLOOMY (low valence) → SHELL</li>
+   * </ul>
+   */
+  private static VoicingType selectVoicingBySentiment(SentimentProfile profile) {
+    double arousal = profile.arousal();
+    double valence = profile.valence();
+    if (arousal >= 0.75 && valence < 0.4) return VoicingType.POWER;  // TENSE, ANGRY
+    if (arousal >= 0.75)                   return VoicingType.BARRE;  // EXCITED
+    if (arousal >= 0.5  && valence >= 0.6) return VoicingType.OPEN;   // HAPPY
+    if (arousal >= 0.5)                    return VoicingType.TRIAD;  // medium energy
+    if (valence >= 0.5)                    return VoicingType.JAZZ;   // RELAXED, CONTENT
+    if (valence < 0.35)                    return VoicingType.SHELL;  // SAD, GLOOMY
+    return VoicingType.OPEN;
+  }
+
   private static BackingTrack evaluate(
       Sentence sentence,
       SentimentProfile profile,
@@ -81,10 +115,12 @@ public final class BackingTrackSelector {
       VoicingType voicing,
       int ppq,
       int tempoBpm,
-      long sentenceTotalTicks) {
+      long sentenceTotalTicks,
+      int numSlots) {
 
     // 1. Generate chord slots aligned to declared phrase boundaries
-    List<ChordSlot> slots = approach.generateChords(melodyNotes, key, profile, sentenceTotalTicks);
+    List<ChordSlot> slots = approach.generateChords(
+        melodyNotes, key, profile, sentenceTotalTicks, numSlots);
 
     // 2. Plan rhythm density
     RhythmDensityPlan plan = RhythmDensityPlanner.plan(profile, "A", sentence);
@@ -113,8 +149,7 @@ public final class BackingTrackSelector {
    * Expands voiced chords + strum pattern into concrete {@link ChanneledNote} events.
    *
    * <p>For each voiced chord the strum pattern is applied relative to the chord's
-   * start tick; each active slot produces one set of note events (one per chord
-   * tone) with velocity scaled by slot position.
+   * start tick; the pattern loops for the full chord duration (one repeat per bar).
    */
   static List<ChanneledNote> buildChanneledNotes(
       List<VoicedChord> voiced, boolean[] strumPat, int ppq) {
@@ -168,7 +203,6 @@ public final class BackingTrackSelector {
     if (keyName == null || keyName.isBlank()) return KeySignature.major(0);
     String lower = keyName.toLowerCase();
     boolean minor = lower.contains("minor");
-    // Extract root note name (first token)
     String rootName = keyName.split("\\s+")[0];
     int root = noteNameToMidi(rootName);
     return minor ? KeySignature.minor(root) : KeySignature.major(root);
