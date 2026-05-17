@@ -11,7 +11,8 @@ public enum BassGrooveArchetype {
   BALLAD,
   FOLK,
   FUNK,
-  REGGAE;
+  REGGAE,
+  POWER;
 
   /**
    * Maps a {@link StrumPattern.Archetype} (rhythm guitar) to the closest
@@ -22,7 +23,8 @@ public enum BassGrooveArchetype {
    */
   public static BassGrooveArchetype fromStrumArchetype(StrumPattern.Archetype strumArchetype) {
     return switch (strumArchetype) {
-      case DRIVING, POWER -> DRIVING;
+      case DRIVING -> DRIVING;
+      case POWER -> POWER;
       case BALLAD, ARPEGGIO -> BALLAD;
       case FOLK -> FOLK;
       case FUNK -> FUNK;

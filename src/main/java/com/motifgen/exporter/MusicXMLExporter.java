@@ -3,6 +3,9 @@ package com.motifgen.exporter;
 import com.motifgen.guitar.backing.BackingTrack;
 import com.motifgen.guitar.backing.BassTrack;
 import com.motifgen.guitar.backing.ChanneledNote;
+import com.motifgen.guitar.backing.DrumEvent;
+import com.motifgen.guitar.backing.DrumPattern;
+import com.motifgen.guitar.backing.DrumTrack;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
@@ -17,7 +20,10 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.File;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
+import java.util.TreeMap;
 
 /**
  * Exports a Sentence to MusicXML format.
@@ -66,101 +72,8 @@ public class MusicXMLExporter {
         int totalBars = sentence.totalBars();
         long ticksPerBar = (long) beatsPerBar * ticksPerBeat;
 
-        for (int bar = 0; bar < totalBars; bar++) {
-            Element measure = appendElement(doc, part, "measure");
-            measure.setAttribute("number", String.valueOf(bar + 1));
-
-            // Attributes on first measure
-            if (bar == 0) {
-                Element attributes = appendElement(doc, measure, "attributes");
-                appendTextElement(doc, attributes, "divisions", String.valueOf(divisions));
-
-                // Key signature
-                Element key = appendElement(doc, attributes, "key");
-                KeyInfo keyInfo = parseKeyName(sentence.getKeyName());
-                appendTextElement(doc, key, "fifths", String.valueOf(keyInfo.fifths));
-                appendTextElement(doc, key, "mode", keyInfo.mode);
-
-                // Time signature
-                Element time = appendElement(doc, attributes, "time");
-                appendTextElement(doc, time, "beats", String.valueOf(beatsPerBar));
-                appendTextElement(doc, time, "beat-type", "4");
-
-                // Clef (treble)
-                Element clef = appendElement(doc, attributes, "clef");
-                appendTextElement(doc, clef, "sign", "G");
-                appendTextElement(doc, clef, "line", "2");
-
-                // Tempo direction
-                Element direction = appendElement(doc, measure, "direction");
-                direction.setAttribute("placement", "above");
-                Element dirType = appendElement(doc, direction, "direction-type");
-                Element metronome = appendElement(doc, dirType, "metronome");
-                appendTextElement(doc, metronome, "beat-unit", "quarter");
-                appendTextElement(doc, metronome, "per-minute", String.valueOf(tempoBpm));
-                Element sound = appendElement(doc, direction, "sound");
-                sound.setAttribute("tempo", String.valueOf(tempoBpm));
-            }
-
-            // Collect notes in this bar
-            long barStart = bar * ticksPerBar;
-            long barEnd = barStart + ticksPerBar;
-
-            long cursor = barStart;
-            for (Note note : notes) {
-                if (note.endTick() <= barStart || note.startTick() >= barEnd) continue;
-
-                // Add forward rest if there's a gap before this note
-                long noteStart = Math.max(note.startTick(), barStart);
-                if (noteStart > cursor) {
-                    addRest(doc, measure, noteStart - cursor, divisions);
-                }
-
-                if (note.isRest()) {
-                    long dur = Math.min(note.endTick(), barEnd) - noteStart;
-                    addRest(doc, measure, dur, divisions);
-                    cursor = noteStart + dur;
-                    continue;
-                }
-
-                long effectiveEnd = Math.min(note.endTick(), barEnd);
-                long duration = effectiveEnd - noteStart;
-                if (duration <= 0) continue;
-
-                Element noteElem = appendElement(doc, measure, "note");
-
-                // Pitch
-                Element pitch = appendElement(doc, noteElem, "pitch");
-                int pc = note.pitch() % 12;
-                appendTextElement(doc, pitch, "step", STEPS[pc]);
-                if (ALTERS[pc] != 0) {
-                    appendTextElement(doc, pitch, "alter", String.valueOf(ALTERS[pc]));
-                }
-                int octave = note.pitch() / 12 - 1;
-                appendTextElement(doc, pitch, "octave", String.valueOf(octave));
-
-                // Duration (in divisions)
-                appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
-
-                // Note type
-                String type = ticksToType(duration, divisions);
-                if (type != null) {
-                    appendTextElement(doc, noteElem, "type", type);
-                }
-
-                // Dynamics
-                Element dynamics = appendElement(doc, noteElem, "dynamics");
-                appendTextElement(doc, dynamics, "other-dynamics",
-                        String.valueOf(Math.round(note.velocity() / 127.0 * 100)));
-
-                cursor = effectiveEnd;
-            }
-
-            // Fill remaining bar with rest
-            if (cursor < barEnd) {
-                addRest(doc, measure, barEnd - cursor, divisions);
-            }
-        }
+        writeMeasures(doc, part, notes, totalBars, ticksPerBar, ticksPerBeat, beatsPerBar,
+                divisions, tempoBpm, sentence.getKeyName(), null);
 
         // Write
         Transformer transformer = TransformerFactory.newInstance().newTransformer();
@@ -273,6 +186,234 @@ public class MusicXMLExporter {
     }
 
     /**
+     * Exports a 4-part MusicXML file: melody (P1), rhythm guitar (P2),
+     * bass guitar (P3), and a percussion drum part (P4).
+     *
+     * <p>The drum part uses {@code <unpitched>} note elements with a percussion
+     * clef. Cymbals are rendered with an "x" notehead.
+     *
+     * @param sentence   the melody sentence
+     * @param backing    the rhythm guitar backing track
+     * @param bass       the bass guitar track
+     * @param drums      the drum track
+     * @param outputFile destination MusicXML file
+     * @param tempoBpm   tempo in beats per minute
+     * @throws Exception if XML I/O fails
+     */
+    public static void export(Sentence sentence, BackingTrack backing, BassTrack bass,
+            DrumTrack drums, File outputFile, int tempoBpm) throws Exception {
+        Motif firstPhrase = sentence.getPhrases().getFirst();
+        int ticksPerBeat = firstPhrase.getTicksPerBeat();
+        int beatsPerBar = firstPhrase.getBeatsPerBar();
+        int divisions = ticksPerBeat;
+
+        Document doc = DocumentBuilderFactory.newInstance().newDocumentBuilder().newDocument();
+
+        Element scorePartwise = doc.createElement("score-partwise");
+        scorePartwise.setAttribute("version", "4.0");
+        doc.appendChild(scorePartwise);
+
+        Element work = appendElement(doc, scorePartwise, "work");
+        appendTextElement(doc, work, "work-title",
+                "MotifGen: " + sentence.getKeyName() + " (" + sentence.getStructure() + ")");
+
+        Element identification = appendElement(doc, scorePartwise, "identification");
+        Element creator = appendTextElement(doc, identification, "creator", "MotifGen");
+        creator.setAttribute("type", "software");
+
+        // Part list — 4 parts
+        Element partList = appendElement(doc, scorePartwise, "part-list");
+
+        Element sp1 = appendElement(doc, partList, "score-part");
+        sp1.setAttribute("id", "P1");
+        appendTextElement(doc, sp1, "part-name", "Melody");
+
+        Element sp2 = appendElement(doc, partList, "score-part");
+        sp2.setAttribute("id", "P2");
+        appendTextElement(doc, sp2, "part-name", "Rhythm Guitar");
+
+        Element sp3 = appendElement(doc, partList, "score-part");
+        sp3.setAttribute("id", "P3");
+        appendTextElement(doc, sp3, "part-name", "Bass Guitar");
+
+        Element sp4 = appendElement(doc, partList, "score-part");
+        sp4.setAttribute("id", "P4");
+        appendTextElement(doc, sp4, "part-name", "Drums");
+        Element si4 = appendElement(doc, sp4, "score-instrument");
+        si4.setAttribute("id", "P4-I1");
+        appendTextElement(doc, si4, "instrument-name", "Drumset");
+        Element mp4 = appendElement(doc, sp4, "midi-instrument");
+        mp4.setAttribute("id", "P4-I1");
+        appendTextElement(doc, mp4, "midi-channel", "10");
+        appendTextElement(doc, mp4, "midi-program", "1");
+
+        int totalBars = sentence.totalBars();
+        long ticksPerBar = (long) beatsPerBar * ticksPerBeat;
+
+        // --- P1: Melody ---
+        Element melodyPart = appendElement(doc, scorePartwise, "part");
+        melodyPart.setAttribute("id", "P1");
+        writeMeasures(doc, melodyPart, sentence.getAllNotes(), totalBars, ticksPerBar,
+                ticksPerBeat, beatsPerBar, divisions, tempoBpm,
+                sentence.getKeyName(), null);
+
+        // --- P2: Rhythm Guitar ---
+        Element guitarPart = appendElement(doc, scorePartwise, "part");
+        guitarPart.setAttribute("id", "P2");
+        writeMeasures(doc, guitarPart,
+                backing.notes().stream().map(ChanneledNote::note).toList(),
+                totalBars, ticksPerBar, ticksPerBeat, beatsPerBar, divisions,
+                tempoBpm, sentence.getKeyName(), null);
+
+        // --- P3: Bass Guitar ---
+        Element bassPart = appendElement(doc, scorePartwise, "part");
+        bassPart.setAttribute("id", "P3");
+        writeMeasures(doc, bassPart,
+                bass.notes().stream().map(ChanneledNote::note).toList(),
+                totalBars, ticksPerBar, ticksPerBeat, beatsPerBar, divisions,
+                tempoBpm, sentence.getKeyName(), "F");
+
+        // --- P4: Drums (percussion) ---
+        Element drumPart = appendElement(doc, scorePartwise, "part");
+        drumPart.setAttribute("id", "P4");
+        writeDrumMeasures(doc, drumPart, drums, totalBars, ticksPerBar, beatsPerBar,
+                divisions, tempoBpm);
+
+        Transformer transformer = TransformerFactory.newInstance().newTransformer();
+        transformer.setOutputProperty(OutputKeys.INDENT, "yes");
+        transformer.setOutputProperty(OutputKeys.DOCTYPE_PUBLIC,
+                "-//Recordare//DTD MusicXML 4.0 Partwise//EN");
+        transformer.setOutputProperty(OutputKeys.DOCTYPE_SYSTEM,
+                "http://www.musicxml.org/dtds/partwise.dtd");
+        transformer.setOutputProperty("{http://xml.apache.org/xslt}indent-amount", "2");
+        transformer.transform(new DOMSource(doc), new StreamResult(outputFile));
+    }
+
+    /**
+     * Writes percussion measures for the drum part using {@code <unpitched>} note
+     * elements. Events are quantized to the nearest sixteenth-note grid before
+     * writing so that measure durations are exact. Simultaneous hits (same
+     * quantized tick) are grouped with {@code <chord/>}. Gaps are filled with rests.
+     */
+    private static void writeDrumMeasures(Document doc, Element partElem, DrumTrack drums,
+            int totalBars, long ticksPerBar, int beatsPerBar, int divisions, int tempoBpm) {
+        List<DrumEvent> events = drums.events();
+        long sixteenth = divisions / 4L;
+
+        for (int bar = 0; bar < totalBars; bar++) {
+            Element measure = appendElement(doc, partElem, "measure");
+            measure.setAttribute("number", String.valueOf(bar + 1));
+
+            if (bar == 0) {
+                Element attributes = appendElement(doc, measure, "attributes");
+                appendTextElement(doc, attributes, "divisions", String.valueOf(divisions));
+
+                Element time = appendElement(doc, attributes, "time");
+                appendTextElement(doc, time, "beats", String.valueOf(beatsPerBar));
+                appendTextElement(doc, time, "beat-type", "4");
+
+                Element clefElem = appendElement(doc, attributes, "clef");
+                appendTextElement(doc, clefElem, "sign", "percussion");
+
+                Element direction = appendElement(doc, measure, "direction");
+                direction.setAttribute("placement", "above");
+                Element dirType = appendElement(doc, direction, "direction-type");
+                Element metronome = appendElement(doc, dirType, "metronome");
+                appendTextElement(doc, metronome, "beat-unit", "quarter");
+                appendTextElement(doc, metronome, "per-minute", String.valueOf(tempoBpm));
+                Element sound = appendElement(doc, direction, "sound");
+                sound.setAttribute("tempo", String.valueOf(tempoBpm));
+            }
+
+            long barStart = bar * ticksPerBar;
+            long barEnd = barStart + ticksPerBar;
+            boolean isLastBar = (bar == totalBars - 1);
+
+            // Collect events in this bar and quantize each to the nearest sixteenth.
+            // Out-of-bar events (including humanization-jittered boundary hits) are
+            // clamped to the last sixteenth slot so they still appear in notation.
+            TreeMap<Long, List<DrumEvent>> byQuantizedTick = new TreeMap<>();
+            for (DrumEvent ev : events) {
+                if (ev.startTick() < barStart) continue;
+                if (!isLastBar && ev.startTick() >= barEnd) continue;
+
+                long relTick = ev.startTick() - barStart;
+                long quantized = Math.round((double) relTick / sixteenth) * sixteenth;
+                // Clamp to valid range [0, ticksPerBar - sixteenth].
+                quantized = Math.max(0, Math.min(ticksPerBar - sixteenth, quantized));
+
+                byQuantizedTick.computeIfAbsent(quantized, k -> new ArrayList<>()).add(ev);
+            }
+
+            if (byQuantizedTick.isEmpty()) {
+                addRest(doc, measure, ticksPerBar, divisions);
+                continue;
+            }
+
+            long cursor = 0;
+            for (var entry : byQuantizedTick.entrySet()) {
+                long slotTick = entry.getKey();
+                List<DrumEvent> group = entry.getValue();
+
+                if (slotTick > cursor) {
+                    addRest(doc, measure, slotTick - cursor, divisions);
+                }
+
+                boolean firstInGroup = true;
+                for (DrumEvent ev : group) {
+                    appendDrumNote(doc, measure, ev, divisions, sixteenth, !firstInGroup);
+                    firstInGroup = false;
+                }
+                cursor = slotTick + sixteenth;
+            }
+
+            if (cursor < ticksPerBar) {
+                addRest(doc, measure, ticksPerBar - cursor, divisions);
+            }
+        }
+    }
+
+    private static void appendDrumNote(Document doc, Element measure, DrumEvent ev,
+            int divisions, long noteDuration, boolean isChord) {
+        Element noteElem = appendElement(doc, measure, "note");
+        if (isChord) {
+            appendElement(doc, noteElem, "chord");
+        }
+        Element unpitched = appendElement(doc, noteElem, "unpitched");
+        DrumDisplay display = drumDisplay(ev.gmNote());
+        appendTextElement(doc, unpitched, "display-step", display.step());
+        appendTextElement(doc, unpitched, "display-octave", String.valueOf(display.octave()));
+        appendTextElement(doc, noteElem, "duration", String.valueOf(noteDuration));
+        appendNoteType(doc, noteElem, noteDuration, divisions);
+        if (isCymbal(ev.gmNote())) {
+            appendTextElement(doc, noteElem, "notehead", "x");
+        }
+    }
+
+    private static boolean isCymbal(int gmNote) {
+        return gmNote == DrumPattern.CLOSED_HIHAT || gmNote == DrumPattern.OPEN_HIHAT
+                || gmNote == DrumPattern.RIDE || gmNote == DrumPattern.RIDE_BELL
+                || gmNote == DrumPattern.CRASH;
+    }
+
+    private record DrumDisplay(String step, int octave) {}
+
+    private static DrumDisplay drumDisplay(int gmNote) {
+        // Standard 5-line percussion staff positions.
+        if (gmNote == DrumPattern.KICK)          return new DrumDisplay("F", 4);
+        if (gmNote == DrumPattern.SNARE)         return new DrumDisplay("C", 5);
+        if (gmNote == DrumPattern.CLOSED_HIHAT)  return new DrumDisplay("G", 5);
+        if (gmNote == DrumPattern.OPEN_HIHAT)    return new DrumDisplay("G", 5);
+        if (gmNote == DrumPattern.RIDE)          return new DrumDisplay("F", 5);
+        if (gmNote == DrumPattern.RIDE_BELL)     return new DrumDisplay("F", 5);
+        if (gmNote == DrumPattern.CRASH)         return new DrumDisplay("A", 5);
+        if (gmNote == DrumPattern.HIGH_TOM)      return new DrumDisplay("E", 5);
+        if (gmNote == DrumPattern.MID_TOM)       return new DrumDisplay("D", 5);
+        if (gmNote == DrumPattern.LOW_TOM)       return new DrumDisplay("A", 4);
+        return new DrumDisplay("C", 5);
+    }
+
+    /**
      * Writes measure elements for one part into {@code partElem}.
      *
      * @param clefSign "G" for treble, "F" for bass, or {@code null} to default to "G"
@@ -316,29 +457,49 @@ public class MusicXMLExporter {
             }
 
             long barStart = bar * ticksPerBar;
-            long barEnd = barStart + ticksPerBar;
-            long cursor = barStart;
+            long sixteenth = divisions / 4L;
+            long cursor = 0; // relative to barStart
+            long prevQRelStart = -1;
 
-            for (Note note : notes) {
-                if (note.endTick() <= barStart || note.startTick() >= barEnd) continue;
+            List<Note> barNotes = notes.stream()
+                    .filter(n -> n.endTick() > barStart && n.startTick() < barStart + ticksPerBar)
+                    .sorted(Comparator.comparingLong(Note::startTick)
+                            .thenComparingInt(Note::pitch))
+                    .toList();
 
-                long noteStart = Math.max(note.startTick(), barStart);
-                if (noteStart > cursor) {
-                    addRest(doc, measure, noteStart - cursor, divisions);
+            for (Note note : barNotes) {
+                long rawStart = Math.max(note.startTick(), barStart);
+                long relStart = rawStart - barStart;
+                long qRelStart = quantize(relStart, sixteenth);
+                qRelStart = Math.max(0, Math.min(ticksPerBar - sixteenth, qRelStart));
+
+                boolean isChord = (qRelStart == prevQRelStart);
+
+                if (!isChord && qRelStart > cursor) {
+                    addRest(doc, measure, qRelStart - cursor, divisions);
                 }
 
                 if (note.isRest()) {
-                    long dur = Math.min(note.endTick(), barEnd) - noteStart;
-                    addRest(doc, measure, dur, divisions);
-                    cursor = noteStart + dur;
+                    if (!isChord) {
+                        long rawDur = Math.min(note.endTick(), barStart + ticksPerBar) - rawStart;
+                        long qDur = Math.max(sixteenth, quantize(rawDur, sixteenth));
+                        qDur = Math.min(qDur, ticksPerBar - qRelStart);
+                        addRest(doc, measure, qDur, divisions);
+                        cursor = qRelStart + qDur;
+                        prevQRelStart = qRelStart;
+                    }
                     continue;
                 }
 
-                long effectiveEnd = Math.min(note.endTick(), barEnd);
-                long duration = effectiveEnd - noteStart;
-                if (duration <= 0) continue;
+                long rawDur = note.endTick() - note.startTick();
+                long qDur = Math.max(sixteenth, quantize(rawDur, sixteenth));
+                qDur = Math.min(qDur, ticksPerBar - qRelStart);
+                if (qDur <= 0) continue;
 
                 Element noteElem = appendElement(doc, measure, "note");
+                if (isChord) {
+                    appendElement(doc, noteElem, "chord");
+                }
                 Element pitch = appendElement(doc, noteElem, "pitch");
                 int pc = note.pitch() % 12;
                 appendTextElement(doc, pitch, "step", STEPS[pc]);
@@ -347,20 +508,17 @@ public class MusicXMLExporter {
                 }
                 int octave = note.pitch() / 12 - 1;
                 appendTextElement(doc, pitch, "octave", String.valueOf(octave));
-                appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
-                String type = ticksToType(duration, divisions);
-                if (type != null) {
-                    appendTextElement(doc, noteElem, "type", type);
-                }
-                Element dynamics = appendElement(doc, noteElem, "dynamics");
-                appendTextElement(doc, dynamics, "other-dynamics",
-                        String.valueOf(Math.round(note.velocity() / 127.0 * 100)));
+                appendTextElement(doc, noteElem, "duration", String.valueOf(qDur));
+                appendNoteType(doc, noteElem, qDur, divisions);
 
-                cursor = effectiveEnd;
+                if (!isChord) {
+                    cursor = qRelStart + qDur;
+                    prevQRelStart = qRelStart;
+                }
             }
 
-            if (cursor < barEnd) {
-                addRest(doc, measure, barEnd - cursor, divisions);
+            if (cursor < ticksPerBar) {
+                addRest(doc, measure, ticksPerBar - cursor, divisions);
             }
         }
     }
@@ -369,9 +527,36 @@ public class MusicXMLExporter {
         Element note = appendElement(doc, measure, "note");
         appendElement(doc, note, "rest");
         appendTextElement(doc, note, "duration", String.valueOf(durationTicks));
-        String type = ticksToType(durationTicks, divisions);
-        if (type != null) {
-            appendTextElement(doc, note, "type", type);
+        appendNoteType(doc, note, durationTicks, divisions);
+    }
+
+    private static long quantize(long ticks, long grid) {
+        return Math.round((double) ticks / grid) * grid;
+    }
+
+    private static void appendNoteType(Document doc, Element noteElem, long dur, int divisions) {
+        long sixteenth = divisions / 4L;
+        long n = (sixteenth > 0) ? dur / sixteenth : 0;
+        String type;
+        boolean dotted;
+        switch ((int) n) {
+            case 1  -> { type = "16th";    dotted = false; }
+            case 2  -> { type = "eighth";  dotted = false; }
+            case 3  -> { type = "eighth";  dotted = true;  }
+            case 4  -> { type = "quarter"; dotted = false; }
+            case 6  -> { type = "quarter"; dotted = true;  }
+            case 8  -> { type = "half";    dotted = false; }
+            case 12 -> { type = "half";    dotted = true;  }
+            case 16 -> { type = "whole";   dotted = false; }
+            default -> {
+                String approx = ticksToType(dur, divisions);
+                if (approx != null) appendTextElement(doc, noteElem, "type", approx);
+                return;
+            }
+        }
+        appendTextElement(doc, noteElem, "type", type);
+        if (dotted) {
+            appendElement(doc, noteElem, "dot");
         }
     }
 

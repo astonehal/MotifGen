@@ -27,6 +27,7 @@ public final class BassRhythmPattern {
   private static final boolean[] FOLK    = {T, F, T, F, T, F, F, T};
   private static final boolean[] FUNK    = {T, T, F, T, F, F, T, F};
   private static final boolean[] REGGAE  = {F, F, T, F, F, F, T, F};
+  private static final boolean[] POWER   = {T, F, F, F, T, F, F, F};
 
   private BassRhythmPattern() {}
 
@@ -43,6 +44,7 @@ public final class BassRhythmPattern {
       case FOLK    -> FOLK;
       case FUNK    -> FUNK;
       case REGGAE  -> REGGAE;
+      case POWER   -> POWER;
     };
     return Arrays.copyOf(base, base.length);
   }

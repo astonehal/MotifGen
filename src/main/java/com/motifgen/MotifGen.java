@@ -8,6 +8,12 @@ import com.motifgen.guitar.backing.BackingTrack;
 import com.motifgen.guitar.backing.BackingTrackGenerator;
 import com.motifgen.guitar.backing.BassTrack;
 import com.motifgen.guitar.backing.BassTrackGenerator;
+import com.motifgen.guitar.backing.ChordSlot;
+import com.motifgen.guitar.backing.DrumGrooveArchetype;
+import com.motifgen.guitar.backing.DrumTrack;
+import com.motifgen.guitar.backing.DrumTrackGenerator;
+import com.motifgen.guitar.backing.HarmonyApproach;
+import com.motifgen.theory.KeySignature;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
 import com.motifgen.model.Sentence;
@@ -181,16 +187,17 @@ public class MotifGen {
 
             BackingTrack backing = BackingTrackGenerator.generate(sentence, profile, tempo);
             BassTrack bass = BassTrackGenerator.generate(sentence, profile, tempo);
+            DrumTrack drums = generateDrums(sentence, profile, bass);
 
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
-                MidiExporter.export(sentence, backing, bass, midFile, tempo);
+                MidiExporter.export(sentence, backing, bass, drums, midFile, tempo);
                 System.out.println("    Exported MIDI to: " + midFile.getAbsolutePath());
             }
 
             if (format == OutputFormat.MUSICXML || format == OutputFormat.BOTH) {
                 File xmlFile = new File(outDir, baseName + ".musicxml");
-                MusicXMLExporter.export(sentence, backing, bass, xmlFile, tempo);
+                MusicXMLExporter.export(sentence, backing, bass, drums, xmlFile, tempo);
                 System.out.println("    Exported MusicXML to: " + xmlFile.getAbsolutePath());
             }
         }
@@ -219,6 +226,40 @@ public class MotifGen {
         if (second == null) second = ranked.get(1);
 
         return List.of(first, second);
+    }
+
+    /**
+     * Derives chord slots and produces a drum track aligned with the bass track.
+     *
+     * @param sentence melody sentence
+     * @param profile  sentiment profile (drives archetype selection)
+     * @param bass     bass track used for kick-locking
+     * @return generated drum track
+     */
+    private static DrumTrack generateDrums(Sentence sentence, SentimentProfile profile,
+            BassTrack bass) {
+        int ppq = sentence.getPhrases().isEmpty()
+                ? 480
+                : sentence.getPhrases().getFirst().getTicksPerBeat();
+        long totalTicks = (long) ppq * 4 * sentence.totalBars();
+        int numSlots = Math.max(4, sentence.totalBars());
+        KeySignature key = KeySignature.major(0);
+        try {
+            String keyName = sentence.getKeyName();
+            if (keyName != null && !keyName.isBlank()) {
+                key = keyName.toLowerCase().contains("minor")
+                        ? KeySignature.minor(0) : KeySignature.major(0);
+            }
+        } catch (Exception ignored) {
+            // Use default key.
+        }
+        List<ChordSlot> slots = HarmonyApproach.FUNCTIONAL_DIATONIC.generateChords(
+                sentence.getAllNotes(), key, profile, totalTicks, numSlots);
+        if (profile == null) {
+            return DrumTrackGenerator.generate(
+                    sentence, slots, bass, DrumGrooveArchetype.DRIVING);
+        }
+        return DrumTrackGenerator.generate(sentence, slots, bass, profile);
     }
 
     private static String sanitize(String s) {
