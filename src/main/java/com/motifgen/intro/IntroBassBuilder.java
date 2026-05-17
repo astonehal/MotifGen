@@ -6,6 +6,7 @@ import com.motifgen.model.Note;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Random;
 
 /**
  * Builds the bass part for a variable-length intro (2, 3, or 4 bars).
@@ -13,20 +14,39 @@ import java.util.List;
  * <p>Three density tiers driven by arousal:
  * <ul>
  *   <li><b>Low</b> ({@code arousal < 0.4}): one whole-note root per bar.</li>
- *   <li><b>Mid</b> ({@code 0.4 ≤ arousal ≤ 0.75}): root on beat 1, fifth on beat 3.</li>
- *   <li><b>High</b> ({@code arousal > 0.75}): eighth-note groove (root/fifth alternating).</li>
+ *   <li><b>Mid</b> ({@code 0.4 ≤ arousal ≤ 0.75}): two-note pattern selected by
+ *       {@link IntroTemplatePool.BassSubTemplate}.</li>
+ *   <li><b>High</b> ({@code arousal > 0.75}): eighth-note groove selected by
+ *       {@link IntroTemplatePool.BassSubTemplate}.</li>
  * </ul>
  *
  * <p>Density escalates bar-by-bar: the ramp formula is
  * {@code Math.min(targetTier, Math.max(0, targetTier - (barCount - 1 - activeBars)))} so that
  * the last active bar always reaches the target tier, regardless of bar count.
+ *
+ * <p>Mid-tier (tier 1) pattern types:
+ * <ul>
+ *   <li>{@code "ROOT_FIFTH"}: root (half-note) on beat 1, fifth (half-note) on beat 3.</li>
+ *   <li>{@code "ROOT_OCTAVE"}: root on beat 1, root+12 on beat 3.</li>
+ *   <li>{@code "WALKING_UP"}: root, maj2nd, maj3rd, fifth on beats 1–4 (quarter notes).</li>
+ *   <li>{@code "SYNCOPATED"}: root on beat 1, fifth on beat 2.5, root on beat 3,
+ *       fifth on beat 4.5.</li>
+ * </ul>
+ *
+ * <p>High-tier (tier 2) pattern types:
+ * <ul>
+ *   <li>{@code "GROOVE_ROOT_FIFTH"}: alternating root/fifth on every eighth note.</li>
+ *   <li>{@code "GROOVE_ROOT_OCT"}: alternating root/root+12 on every eighth note.</li>
+ * </ul>
  */
 public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledNote> {
 
   private static final int BASS_VELOCITY = 80;
   private static final double LOW_AROUSAL = 0.4;
   private static final double HIGH_AROUSAL = 0.75;
-  private static final int FIFTH_SEMITONES = 7;
+  private static final int FIFTH_SEMITONES  = 7;
+  private static final int SECOND_SEMITONES = 2;
+  private static final int THIRD_SEMITONES  = 4;
 
   @Override
   public List<ChanneledNote> build(IntroContext ctx, int entryBar) {
@@ -41,6 +61,7 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
     int tonic = bassRoot(ctx.vampTonicMidi());
 
     int targetTier = densityTier(arousal);
+    IntroTemplatePool.BassSubTemplate template = IntroTemplatePool.drawBass(ctx, new Random());
 
     for (int bar = 0; bar < introBars; bar++) {
       if (bar + 1 < entryBar) {
@@ -50,7 +71,7 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
       int activeBars = bar - (entryBar - 1);
       int tier = Math.min(targetTier, Math.max(0, targetTier - (introBars - 1 - activeBars)));
 
-      addBassBar(events, ctx, tonic, barStart, barTicks, ppq, tier);
+      addBassBar(events, tonic, barStart, barTicks, ppq, tier, template.patternType());
     }
     return List.copyOf(events);
   }
@@ -63,38 +84,70 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
     return 0;
   }
 
-  private void addBassBar(List<ChanneledNote> events, IntroContext ctx, int root,
-      long barStart, long barTicks, int ppq, int tier) {
+  private void addBassBar(List<ChanneledNote> events, int root,
+      long barStart, long barTicks, int ppq, int tier, String patternType) {
     switch (tier) {
       case 0 -> addWholeNote(events, root, barStart, barTicks);
-      case 1 -> addRootFifth(events, root, barStart, ppq);
-      default -> addEighthGroove(events, root, barStart, ppq);
+      case 1 -> addMidPattern(events, root, barStart, barTicks, ppq, patternType);
+      default -> addHighPattern(events, root, barStart, ppq, patternType);
     }
   }
 
   private void addWholeNote(List<ChanneledNote> events, int root, long barStart, long barTicks) {
-    Note note = new Note(root, barStart, barTicks - 10L, BASS_VELOCITY);
-    events.add(new ChanneledNote(note, BassTrack.BASS_CHANNEL));
+    events.add(cn(root, barStart, barTicks - 10L, BASS_VELOCITY));
   }
 
-  private void addRootFifth(List<ChanneledNote> events, int root, long barStart, int ppq) {
-    Note rootNote = new Note(root, barStart, (long) ppq * 2 - 10L, BASS_VELOCITY);
-    events.add(new ChanneledNote(rootNote, BassTrack.BASS_CHANNEL));
-    int fifth = Math.min(127, root + FIFTH_SEMITONES);
-    Note fifthNote = new Note(fifth, barStart + (long) ppq * 2, (long) ppq * 2 - 10L,
-        BASS_VELOCITY - 5);
-    events.add(new ChanneledNote(fifthNote, BassTrack.BASS_CHANNEL));
-  }
+  private void addMidPattern(List<ChanneledNote> events, int root,
+      long barStart, long barTicks, int ppq, String patternType) {
+    int fifth  = Math.min(127, root + FIFTH_SEMITONES);
+    int second = Math.min(127, root + SECOND_SEMITONES);
+    int third  = Math.min(127, root + THIRD_SEMITONES);
+    long half  = (long) ppq * 2;
 
-  private void addEighthGroove(List<ChanneledNote> events, int root, long barStart, int ppq) {
-    long eighth = ppq / 2L;
-    int fifth = Math.min(127, root + FIFTH_SEMITONES);
-    for (int i = 0; i < 8; i++) {
-      int pitch = (i % 2 == 0) ? root : fifth;
-      long start = barStart + i * eighth;
-      Note note = new Note(pitch, start, eighth - 10L, BASS_VELOCITY - (i % 2 == 0 ? 0 : 8));
-      events.add(new ChanneledNote(note, BassTrack.BASS_CHANNEL));
+    switch (patternType) {
+      case "ROOT_OCTAVE" -> {
+        int oct = Math.min(127, root + 12);
+        events.add(cn(root, barStart,        half - 10L, BASS_VELOCITY));
+        events.add(cn(oct,  barStart + half, half - 10L, BASS_VELOCITY - 5));
+      }
+      case "WALKING_UP" -> {
+        // root → maj2nd → maj3rd → fifth (quarter notes ascending)
+        int[] walk = {root, second, third, fifth};
+        for (int i = 0; i < walk.length; i++) {
+          events.add(cn(walk[i], barStart + (long) i * ppq, (long) ppq - 10L, BASS_VELOCITY - i * 3));
+        }
+      }
+      case "SYNCOPATED" -> {
+        // root on 1, fifth on 2.5, root on 3, fifth on 4.5
+        long eighth = ppq / 2L;
+        events.add(cn(root,  barStart,                    (long) ppq - 10L, BASS_VELOCITY));
+        events.add(cn(fifth, barStart + ppq + eighth,     (long) ppq - 10L, BASS_VELOCITY - 5));
+        events.add(cn(root,  barStart + 2L * ppq,         (long) ppq - 10L, BASS_VELOCITY));
+        events.add(cn(fifth, barStart + 3L * ppq + eighth,(long) ppq - 10L, BASS_VELOCITY - 5));
+      }
+      default -> { // "ROOT_FIFTH"
+        events.add(cn(root,  barStart,        half - 10L, BASS_VELOCITY));
+        events.add(cn(fifth, barStart + half, half - 10L, BASS_VELOCITY - 5));
+      }
     }
+  }
+
+  private void addHighPattern(List<ChanneledNote> events, int root,
+      long barStart, int ppq, String patternType) {
+    long eighth = ppq / 2L;
+    int upper = "GROOVE_ROOT_OCT".equals(patternType)
+        ? Math.min(127, root + 12)
+        : Math.min(127, root + FIFTH_SEMITONES);
+
+    for (int i = 0; i < 8; i++) {
+      int pitch = (i % 2 == 0) ? root : upper;
+      long start = barStart + i * eighth;
+      events.add(cn(pitch, start, eighth - 10L, BASS_VELOCITY - (i % 2 == 0 ? 0 : 8)));
+    }
+  }
+
+  private static ChanneledNote cn(int pitch, long start, long dur, int velocity) {
+    return new ChanneledNote(new Note(pitch, start, dur, velocity), BassTrack.BASS_CHANNEL);
   }
 
   /**

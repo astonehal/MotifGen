@@ -14,9 +14,9 @@ import java.util.Random;
  * <p>Groove density increases each bar:
  * <ul>
  *   <li>Bar 1: kick pattern (archetype-specific) only.</li>
- *   <li>Bar 2: kick + closed hi-hat on eighth notes.</li>
- *   <li>Bar 3: kick + snare (archetype-specific beats) + closed hi-hat.</li>
- *   <li>Final bar (launch fill): first half = full groove; second half = snare fill.</li>
+ *   <li>Bar 2: kick + hi-hats (pattern from template).</li>
+ *   <li>Bar 3: kick + snare (archetype-specific beats) + hi-hats.</li>
+ *   <li>Final bar (launch fill): first portion = full groove; remainder = snare fill.</li>
  * </ul>
  *
  * <p>Kick and snare beat placement is controlled by {@link IntroContext#drumArchetype()}:
@@ -27,10 +27,18 @@ import java.util.Random;
  *   <li>default: kick on every beat.</li>
  * </ul>
  *
- * <p>The launch-fill bar behaviour is driven by the drawn {@link IntroTemplatePool.DrumSubTemplate}:
+ * <p>Hi-hat pattern in groove bars is driven by {@link IntroTemplatePool.DrumSubTemplate#grooveType()}:
  * <ul>
- *   <li>{@code twoBeatsGroove=true}: 2 beats groove + 2 beats snare fill.</li>
- *   <li>{@code twoBeatsGroove=false}: 1 beat groove + 3 beats sixteenth snare fill.</li>
+ *   <li>{@code "EIGHTH"}: closed hi-hat on every eighth note.</li>
+ *   <li>{@code "QUARTER"}: closed hi-hat on every quarter note.</li>
+ *   <li>{@code "SIXTEENTH"}: closed hi-hat on every sixteenth note.</li>
+ *   <li>{@code "OFF_BEAT"}: open hi-hat on the "and" of each beat.</li>
+ * </ul>
+ *
+ * <p>The launch-fill bar split is driven by {@link IntroTemplatePool.DrumSubTemplate#twoBeatsGroove()}:
+ * <ul>
+ *   <li>{@code true}: 2 beats groove + 2 beats snare fill.</li>
+ *   <li>{@code false}: 1 beat groove + 3 beats sixteenth snare fill.</li>
  * </ul>
  */
 public final class IntroDrumBuilder implements IntroInstrumentBuilder<DrumEvent> {
@@ -64,7 +72,7 @@ public final class IntroDrumBuilder implements IntroInstrumentBuilder<DrumEvent>
       if (isLastBar) {
         addLaunchFillBar(events, barStart, ppq, barTicks, sixteenth, template);
       } else {
-        addGrooveBar(events, bar, entryBar, barStart, ppq, sixteenth, ctx.drumArchetype());
+        addGrooveBar(events, bar, entryBar, barStart, ppq, sixteenth, ctx.drumArchetype(), template);
       }
     }
     return List.copyOf(events);
@@ -72,68 +80,49 @@ public final class IntroDrumBuilder implements IntroInstrumentBuilder<DrumEvent>
 
   // ---------- bar builders ----------
 
-  /**
-   * Adds a groove bar with density corresponding to its position in the intro.
-   * Kick and snare placement depends on the drum archetype.
-   */
   private void addGrooveBar(List<DrumEvent> events, int bar, int entryBar,
-      long barStart, int ppq, long sixteenth, DrumGrooveArchetype archetype) {
+      long barStart, int ppq, long sixteenth,
+      DrumGrooveArchetype archetype, IntroTemplatePool.DrumSubTemplate template) {
     int activeIdx = bar - (entryBar - 1);
     // tier 0 → kick only; tier 1 → kick + hihat; tier 2 → kick + snare + hihat
     int tier = Math.min(2, activeIdx);
 
-    // Kick pattern — archetype-specific
     addKickPattern(events, barStart, ppq, sixteenth, archetype);
 
     if (tier >= 1) {
-      // Closed hi-hat on every eighth note.
-      for (int e = 0; e < 8; e++) {
-        long start = barStart + e * (ppq / 2L);
-        events.add(hit(DrumPattern.CLOSED_HIHAT, start, sixteenth, HIHAT_VELOCITY));
-      }
+      addHiHatPattern(events, barStart, ppq, sixteenth, template.grooveType());
     }
 
     if (tier >= 2) {
-      // Snare pattern — archetype-specific
       addSnarePattern(events, barStart, ppq, sixteenth, archetype);
     }
   }
 
-  /**
-   * Adds archetype-appropriate kick hits for one bar.
-   */
   private void addKickPattern(List<DrumEvent> events, long barStart, int ppq,
       long sixteenth, DrumGrooveArchetype archetype) {
     switch (archetype) {
       case FOLK, BALLAD -> {
-        // Kick on beat 1 only
         events.add(hit(DrumPattern.KICK, barStart, sixteenth, KICK_VELOCITY));
       }
       case FUNK -> {
-        // Kick on beat 1 and the "and" of beat 2 (beat 2.5 = ppq*2 + ppq/2)
         events.add(hit(DrumPattern.KICK, barStart, sixteenth, KICK_VELOCITY));
         events.add(hit(DrumPattern.KICK, barStart + 2L * ppq + ppq / 2L, sixteenth, KICK_VELOCITY - 5));
       }
       default -> {
-        // DRIVING, POWER, REGGAE, and anything else: kick on beats 1 and 3
+        // DRIVING, POWER, REGGAE: kick on beats 1 and 3
         events.add(hit(DrumPattern.KICK, barStart, sixteenth, KICK_VELOCITY));
         events.add(hit(DrumPattern.KICK, barStart + 2L * ppq, sixteenth, KICK_VELOCITY));
       }
     }
   }
 
-  /**
-   * Adds archetype-appropriate snare hits for one bar (tier 2 only).
-   */
   private void addSnarePattern(List<DrumEvent> events, long barStart, int ppq,
       long sixteenth, DrumGrooveArchetype archetype) {
     switch (archetype) {
       case FOLK, BALLAD -> {
-        // Snare on beat 3
         events.add(hit(DrumPattern.SNARE, barStart + 2L * ppq, sixteenth, SNARE_VELOCITY));
       }
       default -> {
-        // Snare on beats 2 and 4
         events.add(hit(DrumPattern.SNARE, barStart + ppq, sixteenth, SNARE_VELOCITY));
         events.add(hit(DrumPattern.SNARE, barStart + 3L * ppq, sixteenth, SNARE_VELOCITY));
       }
@@ -141,32 +130,59 @@ public final class IntroDrumBuilder implements IntroInstrumentBuilder<DrumEvent>
   }
 
   /**
-   * Launch-fill bar: groove portion + snare fill. The split between groove and fill is
-   * determined by the {@link IntroTemplatePool.DrumSubTemplate}:
-   * <ul>
-   *   <li>{@code twoBeatsGroove=true}: beats 1-2 groove, beats 3-4 sixteenth snare fill.</li>
-   *   <li>{@code twoBeatsGroove=false}: beat 1 groove, beats 2-4 sixteenth snare fill.</li>
-   * </ul>
+   * Adds hi-hat events for one groove bar, using the pattern specified by grooveType.
+   */
+  private void addHiHatPattern(List<DrumEvent> events, long barStart, int ppq,
+      long sixteenth, String grooveType) {
+    switch (grooveType) {
+      case "SIXTEENTH" -> {
+        for (int s = 0; s < 16; s++) {
+          events.add(hit(DrumPattern.CLOSED_HIHAT, barStart + s * sixteenth, sixteenth,
+              HIHAT_VELOCITY - (s % 2 == 0 ? 0 : 8))); // slight accent on even sixteenths
+        }
+      }
+      case "QUARTER" -> {
+        for (int b = 0; b < 4; b++) {
+          events.add(hit(DrumPattern.CLOSED_HIHAT, barStart + (long) b * ppq, sixteenth,
+              HIHAT_VELOCITY));
+        }
+      }
+      case "OFF_BEAT" -> {
+        // Open hi-hat on the "and" of each beat
+        for (int b = 0; b < 4; b++) {
+          long start = barStart + (long) b * ppq + ppq / 2L;
+          events.add(hit(DrumPattern.OPEN_HIHAT, start, sixteenth, HIHAT_VELOCITY));
+        }
+      }
+      default -> { // "EIGHTH"
+        for (int e = 0; e < 8; e++) {
+          events.add(hit(DrumPattern.CLOSED_HIHAT, barStart + e * (ppq / 2L), sixteenth,
+              HIHAT_VELOCITY));
+        }
+      }
+    }
+  }
+
+  /**
+   * Launch-fill bar: groove portion + snare fill. The split is controlled by
+   * {@link IntroTemplatePool.DrumSubTemplate#twoBeatsGroove()}.
    */
   private void addLaunchFillBar(List<DrumEvent> events, long barStart, int ppq,
       long barTicks, long sixteenth, IntroTemplatePool.DrumSubTemplate template) {
-    // Crash on beat 1 to mark the launch.
     events.add(hit(DrumPattern.CRASH, barStart, sixteenth, FILL_VELOCITY));
 
     if (template.twoBeatsGroove()) {
       // 2 beats groove (beats 1 & 2) + 2 beats fill (beats 3 & 4)
       long halfBar = barTicks / 2L;
 
-      // First half: kick on beat 1, kick+snare on beat 2
       events.add(hit(DrumPattern.KICK, barStart, sixteenth, KICK_VELOCITY));
       events.add(hit(DrumPattern.KICK, barStart + (long) ppq, sixteenth, KICK_VELOCITY));
       events.add(hit(DrumPattern.SNARE, barStart + (long) ppq, sixteenth, SNARE_VELOCITY));
-      // Hi-hat on eighth notes through first half
       for (int e = 0; e < 4; e++) {
         events.add(hit(DrumPattern.CLOSED_HIHAT, barStart + e * (ppq / 2L), sixteenth,
             HIHAT_VELOCITY));
       }
-      // Second half: 4-note snare fill on sixteenth notes
+      // 4-note snare fill on sixteenth notes in second half
       for (int i = 0; i < 4; i++) {
         long start = barStart + halfBar + i * sixteenth;
         int vel = Math.min(127, FILL_VELOCITY + i * 3);
@@ -177,7 +193,6 @@ public final class IntroDrumBuilder implements IntroInstrumentBuilder<DrumEvent>
       events.add(hit(DrumPattern.KICK, barStart, sixteenth, KICK_VELOCITY));
       events.add(hit(DrumPattern.CLOSED_HIHAT, barStart, sixteenth, HIHAT_VELOCITY));
 
-      // 3 beats × 4 sixteenths = 12 sixteenth snare hits starting at beat 2
       for (int i = 0; i < 12; i++) {
         long start = barStart + (long) ppq + i * sixteenth;
         if (start >= barStart + barTicks) break;

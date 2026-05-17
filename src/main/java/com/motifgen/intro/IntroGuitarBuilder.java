@@ -15,10 +15,12 @@ import java.util.Random;
  * <ul>
  *   <li><b>Riff mode</b> ({@code riffScore >= 3} or template.riff()): tonic-arpeggio riff in
  *       bar 1; bar 2 is a rhythmic variation (offset by an eighth note); further bars repeat
- *       with slight transposition. The tonic octave is shifted by {@code template.octaveShift()}.
+ *       with slight transposition. The tonic octave is shifted by {@code template.octaveShift()},
+ *       and the melodic shape is controlled by {@code template.riffIntervals()}.
  *   </li>
- *   <li><b>Chord mode</b>: sparse voicings with density increasing each bar. Beat positions
- *       come from the drawn {@link IntroTemplatePool.GuitarTemplate}.
+ *   <li><b>Chord mode</b>: sparse voicings with beat positions driven by
+ *       {@code template.chordBeatsPerBar()} for every bar (index {@code i} = bar {@code i},
+ *       clamped to the last entry for extra bars).
  *   </li>
  * </ul>
  */
@@ -33,6 +35,26 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
   /** Velocity increment per bar for chord mode (density build). */
   private static final int CHORD_VELOCITY_INCREMENT = 5;
 
+  /**
+   * Fallback chord beat-position table used when a template supplies no {@code chordBeatsPerBar}.
+   *
+   * <pre>
+   *  Bar 1: beat 1 only
+   *  Bar 2: beats 1, 3
+   *  Bar 3: beats 1, 2, 3
+   *  Bar 4: all 4 beats (full density)
+   * </pre>
+   */
+  private static final int[][] DEFAULT_BEAT_POSITIONS = {
+      {0},
+      {0, 2},
+      {0, 1, 2},
+      {0, 1, 2, 3},
+  };
+
+  /** Fallback riff intervals (root/3rd/5th/oct) when a template supplies none. */
+  private static final int[] DEFAULT_RIFF_INTERVALS = {0, 4, 7, 12};
+
   @Override
   public List<ChanneledNote> build(IntroContext ctx, int entryBar) {
     int introBars = ctx.barCount();
@@ -42,20 +64,23 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
     IntroTemplatePool.GuitarTemplate template =
         IntroTemplatePool.drawGuitar(ctx, new Random());
     if (ctx.riffScore() >= 3 || template.riff()) {
-      return buildRiff(ctx, entryBar, template.octaveShift());
+      return buildRiff(ctx, entryBar, template);
     }
-    return buildChords(ctx, entryBar, template.beatOffsets());
+    return buildChords(ctx, entryBar, template);
   }
 
   // ---------- riff mode ----------
 
-  private List<ChanneledNote> buildRiff(IntroContext ctx, int entryBar, int octaveShift) {
+  private List<ChanneledNote> buildRiff(
+      IntroContext ctx, int entryBar, IntroTemplatePool.GuitarTemplate template) {
     List<ChanneledNote> events = new ArrayList<>();
     int ppq = ctx.ticksPerBeat();
     long barTicks = (long) ctx.beatsPerBar() * ppq;
     int tonic = ctx.vampTonicMidi();
-    int root = clampToRegister(tonic + octaveShift);
+    int root = clampToRegister(tonic + template.octaveShift());
     int introBars = ctx.barCount();
+    int[] intervals = template.riffIntervals() != null
+        ? template.riffIntervals() : DEFAULT_RIFF_INTERVALS;
 
     for (int bar = 0; bar < introBars; bar++) {
       if (bar + 1 < entryBar) {
@@ -65,8 +90,6 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
       boolean isVariation = (bar == 1); // bar 2 = variation of bar 1
       long offset = isVariation ? ppq / 2L : 0L; // shift by eighth note for variation
 
-      // Arpeggio: root, third, fifth, root+octave each a quarter note apart
-      int[] intervals = {0, 4, 7, 12};
       for (int i = 0; i < intervals.length; i++) {
         long start = barStart + offset + (long) i * ppq;
         if (start >= (bar + 1) * barTicks) {
@@ -83,25 +106,8 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
 
   // ---------- chord mode ----------
 
-  /**
-   * Fallback beat-position table used when a template's beatOffsets array is empty or
-   * when the template list provides fewer offsets than beats available in the bar.
-   *
-   * <pre>
-   *  Bar 1: beat 1 only
-   *  Bar 2: beats 1, 3
-   *  Bar 3: beats 1, 2, 3
-   *  Bar 4: all 4 beats (full density)
-   * </pre>
-   */
-  private static final int[][] DEFAULT_BEAT_POSITIONS = {
-      {0},
-      {0, 2},
-      {0, 1, 2},
-      {0, 1, 2, 3},
-  };
-
-  private List<ChanneledNote> buildChords(IntroContext ctx, int entryBar, int[] templateBeats) {
+  private List<ChanneledNote> buildChords(
+      IntroContext ctx, int entryBar, IntroTemplatePool.GuitarTemplate template) {
     List<ChanneledNote> events = new ArrayList<>();
     int ppq = ctx.ticksPerBeat();
     long barTicks = (long) ctx.beatsPerBar() * ppq;
@@ -109,19 +115,17 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
     int tonic = normaliseToRegister(ctx.vampTonicMidi());
     int fourth = vamp.length > 1 ? normaliseToRegister(vamp[1]) : tonic;
     int introBars = ctx.barCount();
+    int[][] perBarBeats = template.chordBeatsPerBar() != null && template.chordBeatsPerBar().length > 0
+        ? template.chordBeatsPerBar() : DEFAULT_BEAT_POSITIONS;
 
     for (int bar = 0; bar < introBars; bar++) {
       if (bar + 1 < entryBar) {
         continue;
       }
       long barStart = bar * barTicks;
-      // Use template beat offsets for the first bar, default table for subsequent bars
-      int[] beatOffsets;
-      if (bar == 0 && templateBeats != null && templateBeats.length > 0) {
-        beatOffsets = templateBeats;
-      } else {
-        beatOffsets = DEFAULT_BEAT_POSITIONS[Math.min(bar, DEFAULT_BEAT_POSITIONS.length - 1)];
-      }
+      int idx = Math.min(bar, perBarBeats.length - 1);
+      int[] beatOffsets = perBarBeats[idx];
+
       // Use tonic for bars 1, 3, 4 and fourth for bar 2 (I–IV–I–I vamp)
       int root = (bar == 1 && vamp.length > 1) ? fourth : tonic;
       int velocity = CHORD_VELOCITY_BASE + bar * CHORD_VELOCITY_INCREMENT;
