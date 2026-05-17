@@ -76,8 +76,10 @@ class IntroContextTest {
 
   @Test
   void offsetTicksIs4BarsAt480Ppq() {
-    SentimentProfile sentiment = SentimentProfile.fromVA(0.5, 0.5);
+    // Low arousal → barCount=4; offsetTicks = 4 * 4 * 480
+    SentimentProfile sentiment = SentimentProfile.fromVA(0.5, 0.2);
     IntroContext ctx = IntroContext.of(sentiment, C_MAJOR, "driving", 480, 4);
+    assertEquals(4, ctx.barCount());
     assertEquals(4L * 4 * 480, ctx.offsetTicks());
   }
 }

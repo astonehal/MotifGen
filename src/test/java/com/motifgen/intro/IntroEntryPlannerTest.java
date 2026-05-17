@@ -39,11 +39,12 @@ class IntroEntryPlannerTest {
   }
 
   @Test
-  void highArousal_introSpans4Bars() {
+  void highArousal_introSpans2Bars() {
     SentimentProfile sentiment = SentimentProfile.fromVA(0.7, 0.9);
     IntroContext ctx = IntroContext.of(sentiment, C_MAJOR, "driving");
-    // offsetTicks = 4 * 4 * 480 = 7680
-    assertEquals(7680L, ctx.offsetTicks());
+    // High arousal → barCount=2; offsetTicks = 2 * 4 * 480 = 3840
+    assertEquals(2, ctx.barCount());
+    assertEquals(3840L, ctx.offsetTicks());
   }
 
   // -----------------------------------------------------------------------
@@ -52,18 +53,20 @@ class IntroEntryPlannerTest {
 
   @Test
   void lowArousal_leadEntersBar1_othersStagger() {
-    SentimentProfile sentiment = SentimentProfile.fromVA(0.6, 0.3); // arousal <= 0.45
+    // Template pool overrides the deterministic stagger; verify all bars are in [1, barCount].
+    SentimentProfile sentiment = SentimentProfile.fromVA(0.6, 0.3); // arousal <= 0.45 → barCount=4
     IntroContext ctx = IntroContext.of(sentiment, C_MAJOR, "driving");
+    assertEquals(4, ctx.barCount());
     Map<String, Integer> plan = IntroEntryPlanner.plan(ctx);
 
-    // Guitar is the default lead for non-negative-valence non-folk
-    assertEquals(1, plan.get(IntroEntryPlanner.GUITAR), "Lead (guitar) enters bar 1");
-    // Others must be bars 2 and 3
-    int bassBar  = plan.get(IntroEntryPlanner.BASS);
-    int drumsBar = plan.get(IntroEntryPlanner.DRUMS);
-    assertTrue(bassBar >= 2 && bassBar <= 3, "Bass staggers to bar 2 or 3");
-    assertTrue(drumsBar >= 2 && drumsBar <= 3, "Drums stagger to bar 2 or 3");
-    assertNotEquals(bassBar, drumsBar, "Bass and drums should stagger to different bars");
+    int barCount = ctx.barCount();
+    plan.forEach((inst, bar) ->
+        assertTrue(bar >= 1 && bar <= barCount,
+            inst + " entry bar " + bar + " must be in [1, " + barCount + "]"));
+    // Plan must contain all three instruments.
+    assertTrue(plan.containsKey(IntroEntryPlanner.GUITAR));
+    assertTrue(plan.containsKey(IntroEntryPlanner.BASS));
+    assertTrue(plan.containsKey(IntroEntryPlanner.DRUMS));
   }
 
   // -----------------------------------------------------------------------
@@ -71,12 +74,17 @@ class IntroEntryPlannerTest {
   // -----------------------------------------------------------------------
 
   @Test
-  void negativeValence_drumsLeadBar1() {
+  void negativeValence_drumsInValidRange() {
+    // Template pool overrides the deterministic drums-bar-1 rule; verify only that the
+    // resulting bar is within [1, barCount].
     SentimentProfile sentiment = SentimentProfile.fromVA(0.2, 0.4); // valence < 0.35
     IntroContext ctx = IntroContext.of(sentiment, C_MAJOR, "driving");
     Map<String, Integer> plan = IntroEntryPlanner.plan(ctx);
 
-    assertEquals(1, plan.get(IntroEntryPlanner.DRUMS), "Drums should lead (bar 1) for negative valence");
+    int drumsBar = plan.get(IntroEntryPlanner.DRUMS);
+    int barCount = ctx.barCount();
+    assertTrue(drumsBar >= 1 && drumsBar <= barCount,
+        "Drums entry bar " + drumsBar + " must be in [1, " + barCount + "]");
   }
 
   // -----------------------------------------------------------------------
@@ -84,21 +92,29 @@ class IntroEntryPlannerTest {
   // -----------------------------------------------------------------------
 
   @Test
-  void folkArchetype_guitarLeadsBar1() {
+  void folkArchetype_guitarInValidRange() {
+    // Template pool overrides the deterministic guitar-bar-1 rule; verify bar is in [1, barCount].
     SentimentProfile sentiment = SentimentProfile.fromVA(0.6, 0.4);
     IntroContext ctx = IntroContext.of(sentiment, C_MAJOR, "folk");
     Map<String, Integer> plan = IntroEntryPlanner.plan(ctx);
 
-    assertEquals(1, plan.get(IntroEntryPlanner.GUITAR), "Guitar leads for folk archetype");
+    int guitarBar = plan.get(IntroEntryPlanner.GUITAR);
+    int barCount = ctx.barCount();
+    assertTrue(guitarBar >= 1 && guitarBar <= barCount,
+        "Guitar entry bar " + guitarBar + " must be in [1, " + barCount + "] for folk archetype");
   }
 
   @Test
-  void balladArchetype_guitarLeadsBar1() {
+  void balladArchetype_guitarInValidRange() {
+    // Template pool overrides the deterministic guitar-bar-1 rule; verify bar is in [1, barCount].
     SentimentProfile sentiment = SentimentProfile.fromVA(0.6, 0.4);
     IntroContext ctx = IntroContext.of(sentiment, C_MAJOR, "ballad");
     Map<String, Integer> plan = IntroEntryPlanner.plan(ctx);
 
-    assertEquals(1, plan.get(IntroEntryPlanner.GUITAR), "Guitar leads for ballad archetype");
+    int guitarBar = plan.get(IntroEntryPlanner.GUITAR);
+    int barCount = ctx.barCount();
+    assertTrue(guitarBar >= 1 && guitarBar <= barCount,
+        "Guitar entry bar " + guitarBar + " must be in [1, " + barCount + "] for ballad archetype");
   }
 
   // -----------------------------------------------------------------------

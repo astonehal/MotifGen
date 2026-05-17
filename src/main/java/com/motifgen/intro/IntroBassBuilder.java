@@ -8,7 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 /**
- * Builds the bass part for the 4-bar intro.
+ * Builds the bass part for a variable-length intro (2, 3, or 4 bars).
  *
  * <p>Three density tiers driven by arousal:
  * <ul>
@@ -17,13 +17,12 @@ import java.util.List;
  *   <li><b>High</b> ({@code arousal > 0.75}): eighth-note groove (root/fifth alternating).</li>
  * </ul>
  *
- * <p>Density escalates bar-by-bar: bar 1 uses the tier below the actual tier (or stays at
- * low if already low), and each subsequent bar steps up one tier until the target tier is
- * reached.
+ * <p>Density escalates bar-by-bar: the ramp formula is
+ * {@code Math.min(targetTier, Math.max(0, targetTier - (barCount - 1 - activeBars)))} so that
+ * the last active bar always reaches the target tier, regardless of bar count.
  */
 public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledNote> {
 
-  private static final int INTRO_BARS = 4;
   private static final int BASS_VELOCITY = 80;
   private static final double LOW_AROUSAL = 0.4;
   private static final double HIGH_AROUSAL = 0.75;
@@ -31,27 +30,25 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
 
   @Override
   public List<ChanneledNote> build(IntroContext ctx, int entryBar) {
-    if (entryBar > INTRO_BARS) {
+    int introBars = ctx.barCount();
+    if (entryBar > introBars) {
       return List.of();
     }
     List<ChanneledNote> events = new ArrayList<>();
     int ppq = ctx.ticksPerBeat();
     long barTicks = (long) ctx.beatsPerBar() * ppq;
     double arousal = ctx.sentiment().arousal();
-    int tonic = bassRoot(ctx.vampChords()[0]);
+    int tonic = bassRoot(ctx.vampTonicMidi());
 
-    // Determine target density tier for this arousal level.
     int targetTier = densityTier(arousal);
 
-    for (int bar = 0; bar < INTRO_BARS; bar++) {
+    for (int bar = 0; bar < introBars; bar++) {
       if (bar + 1 < entryBar) {
         continue;
       }
       long barStart = bar * barTicks;
-      // Escalate: bar index within active bars (0-based from entryBar).
       int activeBars = bar - (entryBar - 1);
-      // Tier starts 1 below target in bar 0, ramps up, capped at target.
-      int tier = Math.min(targetTier, Math.max(0, targetTier - (INTRO_BARS - 1 - activeBars)));
+      int tier = Math.min(targetTier, Math.max(0, targetTier - (introBars - 1 - activeBars)));
 
       addBassBar(events, ctx, tonic, barStart, barTicks, ppq, tier);
     }
@@ -81,7 +78,6 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
   }
 
   private void addRootFifth(List<ChanneledNote> events, int root, long barStart, int ppq) {
-    // Root on beat 1, fifth on beat 3.
     Note rootNote = new Note(root, barStart, (long) ppq * 2 - 10L, BASS_VELOCITY);
     events.add(new ChanneledNote(rootNote, BassTrack.BASS_CHANNEL));
     int fifth = Math.min(127, root + FIFTH_SEMITONES);
@@ -91,7 +87,6 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
   }
 
   private void addEighthGroove(List<ChanneledNote> events, int root, long barStart, int ppq) {
-    // Alternating root/fifth on each eighth note.
     long eighth = ppq / 2L;
     int fifth = Math.min(127, root + FIFTH_SEMITONES);
     for (int i = 0; i < 8; i++) {
@@ -106,7 +101,7 @@ public final class IntroBassBuilder implements IntroInstrumentBuilder<ChanneledN
    * Normalises a MIDI root to a bass-appropriate register [28, 52] (E1–E3).
    */
   private static int bassRoot(int midi) {
-    int pitch = midi % 12 + 40; // start near E2
+    int pitch = midi % 12 + 40;
     while (pitch > 52) pitch -= 12;
     while (pitch < 28) pitch += 12;
     return pitch;

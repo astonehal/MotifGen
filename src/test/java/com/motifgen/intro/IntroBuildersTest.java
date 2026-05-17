@@ -31,15 +31,21 @@ class IntroBuildersTest {
   private static final KeySignature C_MAJOR = KeySignature.major(0);
   private static final long BAR_TICKS = (long) BPB * PPQ;
 
-  private IntroContext riffCtx;   // driving, high arousal → riff mode
-  private IntroContext chordCtx;  // ballad, low riff score → chord mode
-  private IntroContext highCtx;   // high arousal
+  private IntroContext riffCtx;    // driving, high arousal (mid: 0.6) → riff mode, barCount=3
+  private IntroContext chordCtx;   // ballad, low arousal → chord mode, barCount=4
+  private IntroContext highCtx;    // high arousal (0.9) → barCount=2
+  private IntroContext fourBarCtx; // mid arousal (0.6) → barCount=3 still, use low (0.2) for 4
 
   @BeforeEach
   void setUp() {
-    riffCtx  = IntroContext.of(SentimentProfile.fromVA(0.7, 0.8), C_MAJOR, "driving", PPQ, BPB);
-    chordCtx = IntroContext.of(SentimentProfile.fromVA(0.6, 0.3), C_MAJOR, "ballad",  PPQ, BPB);
-    highCtx  = IntroContext.of(SentimentProfile.fromVA(0.7, 0.9), C_MAJOR, "driving", PPQ, BPB);
+    // arousal 0.6 → barCount=3, riffScore=3 for driving
+    riffCtx    = IntroContext.of(SentimentProfile.fromVA(0.7, 0.6), C_MAJOR, "driving", PPQ, BPB);
+    // arousal 0.3 → barCount=4, riffScore=1 for ballad
+    chordCtx   = IntroContext.of(SentimentProfile.fromVA(0.6, 0.3), C_MAJOR, "ballad",  PPQ, BPB);
+    // arousal 0.9 → barCount=2
+    highCtx    = IntroContext.of(SentimentProfile.fromVA(0.7, 0.9), C_MAJOR, "driving", PPQ, BPB);
+    // arousal 0.2 → barCount=4 (used for tests needing 4 bars)
+    fourBarCtx = IntroContext.of(SentimentProfile.fromVA(0.7, 0.2), C_MAJOR, "driving", PPQ, BPB);
   }
 
   // -----------------------------------------------------------------------
@@ -134,41 +140,49 @@ class IntroBuildersTest {
 
   @Test
   void bassMidArousal_rootAndFifth() {
-    // arousal 0.6 → mid tier: root on beat 1, fifth on beat 3
+    // arousal 0.6 → mid tier: root on beat 1, fifth on beat 3; barCount=3
     IntroContext ctx = IntroContext.of(SentimentProfile.fromVA(0.6, 0.6), C_MAJOR, "driving",
         PPQ, BPB);
+    assertEquals(3, ctx.barCount());
     List<ChanneledNote> events = new IntroBassBuilder().build(ctx, 1);
-    // By bar 4 we should have at least 2 distinct pitches (root + fifth).
-    long bar4Start = 3 * BAR_TICKS;
+    // By the last bar we should have at least 2 distinct pitches (root + fifth).
+    long lastBarStart = (long) (ctx.barCount() - 1) * BAR_TICKS;
     long distinctPitches = events.stream()
-        .filter(cn -> cn.note().startTick() >= bar4Start)
+        .filter(cn -> cn.note().startTick() >= lastBarStart)
         .mapToInt(cn -> cn.note().pitch())
         .distinct().count();
-    assertTrue(distinctPitches >= 2, "Mid-arousal bass should include root and fifth by bar 4");
+    assertTrue(distinctPitches >= 2, "Mid-arousal bass should include root and fifth by last bar");
   }
 
   @Test
   void bassHighArousal_eighthNoteGroove() {
+    // highCtx has arousal=0.9 → barCount=2; last bar is bar 2 (index 1)
+    assertEquals(2, highCtx.barCount());
     List<ChanneledNote> events = new IntroBassBuilder().build(highCtx, 1);
-    // Last bar (bar 4) should have 8 notes (eighth-note groove).
-    long bar4Start = 3 * BAR_TICKS;
-    long bar4Count = events.stream()
-        .filter(cn -> cn.note().startTick() >= bar4Start).count();
-    assertEquals(8, bar4Count, "High-arousal bass bar 4 should have 8 eighth-note events");
+    long lastBarStart = (long) (highCtx.barCount() - 1) * BAR_TICKS;
+    long lastBarCount = events.stream()
+        .filter(cn -> cn.note().startTick() >= lastBarStart
+            && cn.note().startTick() < lastBarStart + BAR_TICKS)
+        .count();
+    assertEquals(8, lastBarCount,
+        "High-arousal bass last bar should have 8 eighth-note events");
   }
 
   @Test
   void bassEscalates_notCountIncreasesOrStays() {
+    // highCtx barCount=2; check bars 1→2 are non-decreasing
+    assertEquals(2, highCtx.barCount());
     List<ChanneledNote> events = new IntroBassBuilder().build(highCtx, 1);
-    long[] counts = new long[4];
-    for (int bar = 0; bar < 4; bar++) {
-      final long start = bar * BAR_TICKS;
+    int barCount = highCtx.barCount();
+    long[] counts = new long[barCount];
+    for (int bar = 0; bar < barCount; bar++) {
+      final long start = (long) bar * BAR_TICKS;
       final long end   = start + BAR_TICKS;
       counts[bar] = events.stream()
           .filter(cn -> cn.note().startTick() >= start && cn.note().startTick() < end)
           .count();
     }
-    for (int bar = 1; bar < 4; bar++) {
+    for (int bar = 1; bar < barCount; bar++) {
       assertTrue(counts[bar] >= counts[bar - 1],
           "Bass note count should be non-decreasing (bar " + (bar + 1) + ")");
     }
@@ -180,53 +194,65 @@ class IntroBuildersTest {
 
   @Test
   void drums_eventCountIncreasesPerBar() {
-    List<DrumEvent> events = new IntroDrumBuilder().build(riffCtx, 1);
-    int[] counts = new int[4];
+    // fourBarCtx: arousal=0.2 → barCount=4; full density ramp over 4 bars
+    assertEquals(4, fourBarCtx.barCount());
+    List<DrumEvent> events = new IntroDrumBuilder().build(fourBarCtx, 1);
+    int barCount = fourBarCtx.barCount();
+    int[] counts = new int[barCount];
     for (DrumEvent ev : events) {
       int bar = (int) (ev.startTick() / BAR_TICKS);
-      if (bar >= 0 && bar < 4) counts[bar]++;
+      if (bar >= 0 && bar < barCount) counts[bar]++;
     }
-    // Bars 1–3 must be non-decreasing; bar 4 may differ due to fill structure.
-    for (int bar = 1; bar < 3; bar++) {
+    // Bars 1 to (barCount-1) must be non-decreasing; last bar is fill so excluded.
+    for (int bar = 1; bar < barCount - 1; bar++) {
       assertTrue(counts[bar] >= counts[bar - 1],
-          "Drum density should increase through bars 1-3 (bar " + (bar + 1) + ")");
+          "Drum density should increase through bars 1-" + (barCount - 1)
+              + " (bar " + (bar + 1) + ")");
     }
   }
 
   @Test
   void drums_bar4ContainsSnareHits() {
-    List<DrumEvent> events = new IntroDrumBuilder().build(riffCtx, 1);
-    long bar4Start = 3 * BAR_TICKS;
+    // fourBarCtx → barCount=4; last bar is index 3
+    assertEquals(4, fourBarCtx.barCount());
+    List<DrumEvent> events = new IntroDrumBuilder().build(fourBarCtx, 1);
+    long lastBarStart = (long) (fourBarCtx.barCount() - 1) * BAR_TICKS;
     boolean hasSnare = events.stream()
-        .anyMatch(ev -> ev.startTick() >= bar4Start && ev.gmNote() == DrumPattern.SNARE);
-    assertTrue(hasSnare, "Bar 4 should contain snare fill hits");
+        .anyMatch(ev -> ev.startTick() >= lastBarStart && ev.gmNote() == DrumPattern.SNARE);
+    assertTrue(hasSnare, "Last bar should contain snare fill hits");
   }
 
   @Test
   void drums_bar4SecondHalfContainsFourSnares() {
-    List<DrumEvent> events = new IntroDrumBuilder().build(riffCtx, 1);
-    long bar4Start = 3 * BAR_TICKS;
-    long halfBar   = BAR_TICKS / 2;
-    long fillStart = bar4Start + halfBar;
+    // fourBarCtx → barCount=4; check the launch-fill bar's second half
+    assertEquals(4, fourBarCtx.barCount());
+    List<DrumEvent> events = new IntroDrumBuilder().build(fourBarCtx, 1);
+    long lastBarStart = (long) (fourBarCtx.barCount() - 1) * BAR_TICKS;
+    long fillStart = lastBarStart + BAR_TICKS / 2;
 
+    // The twoBeatsGroove template produces exactly 4 snare hits in the second half;
+    // the oneBeatsGroove template produces 12 — assert at least 4.
     long fillSnares = events.stream()
         .filter(ev -> ev.startTick() >= fillStart && ev.gmNote() == DrumPattern.SNARE)
         .count();
-    assertEquals(4, fillSnares, "Bar 4 second half should have exactly 4 snare fill hits");
+    assertTrue(fillSnares >= 4,
+        "Last bar second half should have at least 4 snare fill hits, got " + fillSnares);
   }
 
   @Test
   void drums_bar4HasCrashAtStart() {
-    List<DrumEvent> events = new IntroDrumBuilder().build(riffCtx, 1);
-    long bar4Start = 3 * BAR_TICKS;
+    // fourBarCtx → barCount=4; crash at beat 1 of last bar
+    assertEquals(4, fourBarCtx.barCount());
+    List<DrumEvent> events = new IntroDrumBuilder().build(fourBarCtx, 1);
+    long lastBarStart = (long) (fourBarCtx.barCount() - 1) * BAR_TICKS;
     boolean hasCrash = events.stream()
-        .anyMatch(ev -> ev.startTick() == bar4Start && ev.gmNote() == DrumPattern.CRASH);
-    assertTrue(hasCrash, "Bar 4 beat 1 should have a crash cymbal");
+        .anyMatch(ev -> ev.startTick() == lastBarStart && ev.gmNote() == DrumPattern.CRASH);
+    assertTrue(hasCrash, "Last bar beat 1 should have a crash cymbal");
   }
 
   @Test
   void drums_noEventsBeforeEntryBar() {
-    List<DrumEvent> events = new IntroDrumBuilder().build(riffCtx, 2);
+    List<DrumEvent> events = new IntroDrumBuilder().build(fourBarCtx, 2);
     events.forEach(ev ->
         assertTrue(ev.startTick() >= BAR_TICKS, "No drum events before entryBar 2"));
   }

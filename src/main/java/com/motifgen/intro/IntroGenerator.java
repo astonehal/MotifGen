@@ -6,47 +6,49 @@ import com.motifgen.guitar.backing.DrumEvent;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 
 /**
- * Facade that generates 3 intro candidates, scores each with {@link IntroScorer}, and returns the
- * best {@link IntroTrack}.
+ * Facade that generates up to 8 intro candidates, scores each with {@link IntroScorer}, and
+ * returns the best {@link IntroTrack} that meets the minimum score threshold (30.0).
  *
- * <p>Each candidate uses the same {@link IntroEntryPlanner} plan but a different random seed
- * variation (passed via slightly mutated arousal ±0.05) so the three candidates differ in
- * density and timing choices without requiring a separate RNG dependency.
+ * <p>If no candidate reaches the threshold after 8 attempts, the highest-scoring candidate is
+ * returned unconditionally.
+ *
+ * <p>Each attempt draws fresh templates from {@link IntroTemplatePool} using the shared RNG,
+ * so successive attempts genuinely differ in entry order, guitar pattern, and drum sub-pattern.
  */
 public final class IntroGenerator {
 
-  private static final int NUM_CANDIDATES = 3;
-  /** Arousal delta applied to the second and third candidate contexts. */
-  private static final double CANDIDATE_DELTA = 0.05;
+  private static final int MAX_ATTEMPTS = 8;
 
   private final IntroGuitarBuilder guitarBuilder = new IntroGuitarBuilder();
   private final IntroBassBuilder bassBuilder = new IntroBassBuilder();
   private final IntroDrumBuilder drumBuilder = new IntroDrumBuilder();
   private final IntroScorer scorer = new IntroScorer();
+  private final Random rng = new Random();
 
   /**
-   * Generates 3 intro candidates and returns the highest-scoring one.
+   * Generates up to {@value MAX_ATTEMPTS} intro candidates and returns the best one.
+   *
+   * <p>Preference is given to the highest-scoring candidate that meets the 30.0 minimum.
+   * If none qualifies, the overall highest scorer is returned.
    *
    * @param ctx base intro context
    * @return best {@link IntroTrack} by {@link IntroScorer} score
    */
   public IntroTrack generate(IntroContext ctx) {
-    Map<String, Integer> entryMap = IntroEntryPlanner.plan(ctx);
+    List<IntroTrack> candidates = new ArrayList<>(MAX_ATTEMPTS);
 
-    List<IntroTrack> candidates = new ArrayList<>(NUM_CANDIDATES);
+    for (int i = 0; i < MAX_ATTEMPTS; i++) {
+      Map<String, Integer> entryMap = IntroEntryPlanner.plan(ctx);
 
-    for (int i = 0; i < NUM_CANDIDATES; i++) {
-      IntroContext candidateCtx = varyContext(ctx, i);
-      Map<String, Integer> candidateEntry = IntroEntryPlanner.plan(candidateCtx);
-
-      List<ChanneledNote> guitar = guitarBuilder.build(candidateCtx,
-          candidateEntry.getOrDefault(IntroEntryPlanner.GUITAR, 1));
-      List<ChanneledNote> bass = bassBuilder.build(candidateCtx,
-          candidateEntry.getOrDefault(IntroEntryPlanner.BASS, 1));
-      List<DrumEvent> drums = drumBuilder.build(candidateCtx,
-          candidateEntry.getOrDefault(IntroEntryPlanner.DRUMS, 1));
+      List<ChanneledNote> guitar = guitarBuilder.build(ctx,
+          entryMap.getOrDefault(IntroEntryPlanner.GUITAR, 1));
+      List<ChanneledNote> bass = bassBuilder.build(ctx,
+          entryMap.getOrDefault(IntroEntryPlanner.BASS, 1));
+      List<DrumEvent> drums = drumBuilder.build(ctx,
+          entryMap.getOrDefault(IntroEntryPlanner.DRUMS, 1));
 
       double raw = scorer.score(
           new IntroTrack(guitar, bass, drums, 0.0, ctx.offsetTicks()),
@@ -55,28 +57,13 @@ public final class IntroGenerator {
       candidates.add(new IntroTrack(guitar, bass, drums, raw, ctx.offsetTicks()));
     }
 
+    // Prefer the best candidate that meets the minimum threshold.
     return candidates.stream()
+        .filter(t -> scorer.meetsMinimum(t.score()))
         .max((a, b) -> Double.compare(a.score(), b.score()))
-        .orElseThrow(() -> new IllegalStateException("No intro candidates generated"));
-  }
-
-  // ---------- private helpers ----------
-
-  /**
-   * Returns a context whose arousal is slightly varied for candidate {@code index} so that each
-   * candidate differs without changing the overall musical character.
-   */
-  private IntroContext varyContext(IntroContext base, int index) {
-    if (index == 0) return base;
-    double delta = (index == 1) ? CANDIDATE_DELTA : -CANDIDATE_DELTA;
-    double newArousal = clamp01(base.sentiment().arousal() + delta);
-    com.motifgen.sentiment.SentimentProfile variedSentiment =
-        com.motifgen.sentiment.SentimentProfile.fromVA(base.sentiment().valence(), newArousal);
-    return IntroContext.of(variedSentiment, base.key(), base.archetype(),
-        base.ticksPerBeat(), base.beatsPerBar());
-  }
-
-  private static double clamp01(double v) {
-    return Math.max(0.0, Math.min(1.0, v));
+        .orElseGet(() ->
+            candidates.stream()
+                .max((a, b) -> Double.compare(a.score(), b.score()))
+                .orElseThrow(() -> new IllegalStateException("No intro candidates generated")));
   }
 }

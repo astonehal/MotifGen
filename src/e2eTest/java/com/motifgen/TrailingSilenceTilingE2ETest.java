@@ -251,23 +251,44 @@ class TrailingSilenceTilingE2ETest {
     assertNotNull(outputFiles, "output directory must contain MIDI files");
     assertTrue(outputFiles.length >= 1, "at least one MIDI file must be produced");
 
-    // No NOTE_ON should appear at tick > 6719 within the first phrase window (0..7680).
-    // Before the fix, a phantom tile was placed at tick 6719 with notes at 6719 and 7439.
-    long phantomBoundaryTick = 6719L;
+    // The intro now has a variable length (offsetTicks). Sentence melody notes (channel 0)
+    // are shifted by offsetTicks. We check: within the first sentence phrase window
+    // [offsetTicks, offsetTicks + 7680), no melody note appears after the motif boundary tick
+    // (offsetTicks + 6719). This preserves the original phantom-note regression test intent.
+    //
+    // We detect offsetTicks from the sequence by finding the first channel-0 NOTE_ON tick.
+    long phantomRelativeBoundary = 6719L;
+    long phraseLength = 7680L;
 
     for (File midiFile : outputFiles) {
       Sequence seq = MidiSystem.getSequence(midiFile);
+
+      // Find the offset (first channel-0 melody note in the sequence = start of sentence).
+      long offsetTicks = Long.MAX_VALUE;
       for (Track track : seq.getTracks()) {
         for (int i = 0; i < track.size(); i++) {
           MidiEvent event = track.get(i);
           if (!(event.getMessage() instanceof ShortMessage sm)) continue;
           if (sm.getCommand() != ShortMessage.NOTE_ON) continue;
           if (sm.getData2() == 0) continue;
-          // Only check melody channel (channel 0); backing guitar (channel 1) may
-          // legitimately place notes throughout the bar to fill rhythmic gaps.
+          if (sm.getChannel() != 0) continue;
+          offsetTicks = Math.min(offsetTicks, event.getTick());
+        }
+      }
+      if (offsetTicks == Long.MAX_VALUE) continue; // no melody notes — skip
+
+      long phantomBoundaryTick = offsetTicks + phantomRelativeBoundary;
+      long phraseEnd = offsetTicks + phraseLength;
+
+      for (Track track : seq.getTracks()) {
+        for (int i = 0; i < track.size(); i++) {
+          MidiEvent event = track.get(i);
+          if (!(event.getMessage() instanceof ShortMessage sm)) continue;
+          if (sm.getCommand() != ShortMessage.NOTE_ON) continue;
+          if (sm.getData2() == 0) continue;
           if (sm.getChannel() != 0) continue;
           long tick = event.getTick();
-          if (tick < 7680L) {
+          if (tick >= offsetTicks && tick < phraseEnd) {
             assertTrue(tick <= phantomBoundaryTick,
                 "phantom note detected in " + midiFile.getName()
                     + " at tick " + tick + " (must be <= " + phantomBoundaryTick + ")");
