@@ -81,6 +81,24 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
 
   // ---------- chord mode ----------
 
+  /**
+   * Beat positions (in beats, 0-indexed) for each bar. Always on the beat to avoid
+   * triplet-feel subdivisions when drums and bass are playing on the pulse.
+   *
+   * <pre>
+   *  Bar 1: beat 1 only
+   *  Bar 2: beats 1, 3
+   *  Bar 3: beats 1, 2, 3
+   *  Bar 4: all 4 beats (full density)
+   * </pre>
+   */
+  private static final int[][] BEAT_POSITIONS = {
+      {0},
+      {0, 2},
+      {0, 1, 2},
+      {0, 1, 2, 3},
+  };
+
   private List<ChanneledNote> buildChords(IntroContext ctx, int entryBar) {
     List<ChanneledNote> events = new ArrayList<>();
     int ppq = ctx.ticksPerBeat();
@@ -94,19 +112,15 @@ public final class IntroGuitarBuilder implements IntroInstrumentBuilder<Channele
         continue;
       }
       long barStart = bar * barTicks;
-      // Density: strums per bar = bar index + 1, capped at beatsPerBar
-      int strums = Math.min(bar + 1, ctx.beatsPerBar());
-      long spacing = barTicks / strums;
+      int[] beatOffsets = BEAT_POSITIONS[Math.min(bar, BEAT_POSITIONS.length - 1)];
       // Use tonic for bars 1, 3, 4 and fourth for bar 2 (I–IV–I–I vamp)
       int root = (bar == 1 && vamp.length > 1) ? fourth : tonic;
       int velocity = CHORD_VELOCITY_BASE + bar * CHORD_VELOCITY_INCREMENT;
+      // Duration: just under a quarter note so chords don't blur into each other
+      long dur = ppq - ppq / 8L;
 
-      for (int s = 0; s < strums; s++) {
-        long start = barStart + s * spacing;
-        long dur = spacing - ppq / 8L;
-        if (dur <= 0) {
-          dur = ppq / 4L;
-        }
+      for (int beatOffset : beatOffsets) {
+        long start = barStart + (long) beatOffset * ppq;
         Note note = new Note(root, start, dur, velocity);
         events.add(new ChanneledNote(note, BackingTrack.BACKING_CHANNEL));
         // Add fifth above for a fuller voicing
