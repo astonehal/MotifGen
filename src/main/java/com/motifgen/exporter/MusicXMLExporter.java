@@ -20,6 +20,7 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.File;
+import java.util.Comparator;
 import java.util.List;
 
 /**
@@ -105,24 +106,32 @@ public class MusicXMLExporter {
                 sound.setAttribute("tempo", String.valueOf(tempoBpm));
             }
 
-            // Collect notes in this bar
             long barStart = bar * ticksPerBar;
             long barEnd = barStart + ticksPerBar;
-
             long cursor = barStart;
-            for (Note note : notes) {
-                if (note.endTick() <= barStart || note.startTick() >= barEnd) continue;
+            long prevNoteStart = -1;
 
-                // Add forward rest if there's a gap before this note
+            List<Note> barNotes = notes.stream()
+                    .filter(n -> n.endTick() > barStart && n.startTick() < barEnd)
+                    .sorted(Comparator.comparingLong(Note::startTick)
+                            .thenComparingInt(Note::pitch))
+                    .toList();
+
+            for (Note note : barNotes) {
                 long noteStart = Math.max(note.startTick(), barStart);
-                if (noteStart > cursor) {
+                boolean isChord = (noteStart == prevNoteStart);
+
+                if (!isChord && noteStart > cursor) {
                     addRest(doc, measure, noteStart - cursor, divisions);
                 }
 
                 if (note.isRest()) {
-                    long dur = Math.min(note.endTick(), barEnd) - noteStart;
-                    addRest(doc, measure, dur, divisions);
-                    cursor = noteStart + dur;
+                    if (!isChord) {
+                        long dur = Math.min(note.endTick(), barEnd) - noteStart;
+                        addRest(doc, measure, dur, divisions);
+                        cursor = noteStart + dur;
+                        prevNoteStart = noteStart;
+                    }
                     continue;
                 }
 
@@ -131,8 +140,9 @@ public class MusicXMLExporter {
                 if (duration <= 0) continue;
 
                 Element noteElem = appendElement(doc, measure, "note");
-
-                // Pitch
+                if (isChord) {
+                    appendElement(doc, noteElem, "chord");
+                }
                 Element pitch = appendElement(doc, noteElem, "pitch");
                 int pc = note.pitch() % 12;
                 appendTextElement(doc, pitch, "step", STEPS[pc]);
@@ -141,25 +151,18 @@ public class MusicXMLExporter {
                 }
                 int octave = note.pitch() / 12 - 1;
                 appendTextElement(doc, pitch, "octave", String.valueOf(octave));
-
-                // Duration (in divisions)
                 appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
-
-                // Note type
                 String type = ticksToType(duration, divisions);
                 if (type != null) {
                     appendTextElement(doc, noteElem, "type", type);
                 }
 
-                // Dynamics
-                Element dynamics = appendElement(doc, noteElem, "dynamics");
-                appendTextElement(doc, dynamics, "other-dynamics",
-                        String.valueOf(Math.round(note.velocity() / 127.0 * 100)));
-
-                cursor = effectiveEnd;
+                if (!isChord) {
+                    cursor = effectiveEnd;
+                    prevNoteStart = noteStart;
+                }
             }
 
-            // Fill remaining bar with rest
             if (cursor < barEnd) {
                 addRest(doc, measure, barEnd - cursor, divisions);
             }
@@ -329,6 +332,13 @@ public class MusicXMLExporter {
         Element sp4 = appendElement(doc, partList, "score-part");
         sp4.setAttribute("id", "P4");
         appendTextElement(doc, sp4, "part-name", "Drums");
+        Element si4 = appendElement(doc, sp4, "score-instrument");
+        si4.setAttribute("id", "P4-I1");
+        appendTextElement(doc, si4, "instrument-name", "Drumset");
+        Element mp4 = appendElement(doc, sp4, "midi-instrument");
+        mp4.setAttribute("id", "P4-I1");
+        appendTextElement(doc, mp4, "midi-channel", "10");
+        appendTextElement(doc, mp4, "midi-program", "1");
 
         int totalBars = sentence.totalBars();
         long ticksPerBar = (long) beatsPerBar * ticksPerBeat;
@@ -394,7 +404,6 @@ public class MusicXMLExporter {
 
                 Element clefElem = appendElement(doc, attributes, "clef");
                 appendTextElement(doc, clefElem, "sign", "percussion");
-                appendTextElement(doc, clefElem, "line", "2");
 
                 Element direction = appendElement(doc, measure, "direction");
                 direction.setAttribute("placement", "above");
@@ -511,19 +520,29 @@ public class MusicXMLExporter {
             long barStart = bar * ticksPerBar;
             long barEnd = barStart + ticksPerBar;
             long cursor = barStart;
+            long prevNoteStart = -1;
 
-            for (Note note : notes) {
-                if (note.endTick() <= barStart || note.startTick() >= barEnd) continue;
+            List<Note> barNotes = notes.stream()
+                    .filter(n -> n.endTick() > barStart && n.startTick() < barEnd)
+                    .sorted(Comparator.comparingLong(Note::startTick)
+                            .thenComparingInt(Note::pitch))
+                    .toList();
 
+            for (Note note : barNotes) {
                 long noteStart = Math.max(note.startTick(), barStart);
-                if (noteStart > cursor) {
+                boolean isChord = (noteStart == prevNoteStart);
+
+                if (!isChord && noteStart > cursor) {
                     addRest(doc, measure, noteStart - cursor, divisions);
                 }
 
                 if (note.isRest()) {
-                    long dur = Math.min(note.endTick(), barEnd) - noteStart;
-                    addRest(doc, measure, dur, divisions);
-                    cursor = noteStart + dur;
+                    if (!isChord) {
+                        long dur = Math.min(note.endTick(), barEnd) - noteStart;
+                        addRest(doc, measure, dur, divisions);
+                        cursor = noteStart + dur;
+                        prevNoteStart = noteStart;
+                    }
                     continue;
                 }
 
@@ -532,6 +551,9 @@ public class MusicXMLExporter {
                 if (duration <= 0) continue;
 
                 Element noteElem = appendElement(doc, measure, "note");
+                if (isChord) {
+                    appendElement(doc, noteElem, "chord");
+                }
                 Element pitch = appendElement(doc, noteElem, "pitch");
                 int pc = note.pitch() % 12;
                 appendTextElement(doc, pitch, "step", STEPS[pc]);
@@ -545,11 +567,11 @@ public class MusicXMLExporter {
                 if (type != null) {
                     appendTextElement(doc, noteElem, "type", type);
                 }
-                Element dynamics = appendElement(doc, noteElem, "dynamics");
-                appendTextElement(doc, dynamics, "other-dynamics",
-                        String.valueOf(Math.round(note.velocity() / 127.0 * 100)));
 
-                cursor = effectiveEnd;
+                if (!isChord) {
+                    cursor = effectiveEnd;
+                    prevNoteStart = noteStart;
+                }
             }
 
             if (cursor < barEnd) {
