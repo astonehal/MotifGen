@@ -59,8 +59,8 @@ class BassTrackTest {
 
   @Test
   void bassGrooveArchetypeHasFiveValues() {
-    assertEquals(5, BassGrooveArchetype.values().length,
-        "Expected exactly 5 BassGrooveArchetype variants");
+    assertEquals(6, BassGrooveArchetype.values().length,
+        "Expected exactly 6 BassGrooveArchetype variants");
   }
 
   @Test

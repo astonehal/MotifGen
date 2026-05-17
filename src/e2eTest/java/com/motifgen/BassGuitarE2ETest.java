@@ -527,8 +527,8 @@ class BassGuitarE2ETest {
 
     // Inspect the first output file
     javax.sound.midi.Sequence outSeq = MidiSystem.getSequence(midFiles[0]);
-    assertEquals(3, outSeq.getTracks().length,
-        "Full pipeline output must be a 3-track MIDI (melody + rhythm + bass)");
+    assertEquals(4, outSeq.getTracks().length,
+        "Full pipeline output must be a 4-track MIDI (melody + rhythm + bass + drums)");
 
     // Track 2 must have NOTE_ON events on BASS_CHANNEL (channel index 2)
     javax.sound.midi.Track bassOut = outSeq.getTracks()[2];
