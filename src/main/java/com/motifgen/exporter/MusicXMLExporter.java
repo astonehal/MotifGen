@@ -72,103 +72,8 @@ public class MusicXMLExporter {
         int totalBars = sentence.totalBars();
         long ticksPerBar = (long) beatsPerBar * ticksPerBeat;
 
-        for (int bar = 0; bar < totalBars; bar++) {
-            Element measure = appendElement(doc, part, "measure");
-            measure.setAttribute("number", String.valueOf(bar + 1));
-
-            // Attributes on first measure
-            if (bar == 0) {
-                Element attributes = appendElement(doc, measure, "attributes");
-                appendTextElement(doc, attributes, "divisions", String.valueOf(divisions));
-
-                // Key signature
-                Element key = appendElement(doc, attributes, "key");
-                KeyInfo keyInfo = parseKeyName(sentence.getKeyName());
-                appendTextElement(doc, key, "fifths", String.valueOf(keyInfo.fifths));
-                appendTextElement(doc, key, "mode", keyInfo.mode);
-
-                // Time signature
-                Element time = appendElement(doc, attributes, "time");
-                appendTextElement(doc, time, "beats", String.valueOf(beatsPerBar));
-                appendTextElement(doc, time, "beat-type", "4");
-
-                // Clef (treble)
-                Element clef = appendElement(doc, attributes, "clef");
-                appendTextElement(doc, clef, "sign", "G");
-                appendTextElement(doc, clef, "line", "2");
-
-                // Tempo direction
-                Element direction = appendElement(doc, measure, "direction");
-                direction.setAttribute("placement", "above");
-                Element dirType = appendElement(doc, direction, "direction-type");
-                Element metronome = appendElement(doc, dirType, "metronome");
-                appendTextElement(doc, metronome, "beat-unit", "quarter");
-                appendTextElement(doc, metronome, "per-minute", String.valueOf(tempoBpm));
-                Element sound = appendElement(doc, direction, "sound");
-                sound.setAttribute("tempo", String.valueOf(tempoBpm));
-            }
-
-            long barStart = bar * ticksPerBar;
-            long barEnd = barStart + ticksPerBar;
-            long cursor = barStart;
-            long prevNoteStart = -1;
-
-            List<Note> barNotes = notes.stream()
-                    .filter(n -> n.endTick() > barStart && n.startTick() < barEnd)
-                    .sorted(Comparator.comparingLong(Note::startTick)
-                            .thenComparingInt(Note::pitch))
-                    .toList();
-
-            for (Note note : barNotes) {
-                long noteStart = Math.max(note.startTick(), barStart);
-                boolean isChord = (noteStart == prevNoteStart);
-
-                if (!isChord && noteStart > cursor) {
-                    addRest(doc, measure, noteStart - cursor, divisions);
-                }
-
-                if (note.isRest()) {
-                    if (!isChord) {
-                        long dur = Math.min(note.endTick(), barEnd) - noteStart;
-                        addRest(doc, measure, dur, divisions);
-                        cursor = noteStart + dur;
-                        prevNoteStart = noteStart;
-                    }
-                    continue;
-                }
-
-                long effectiveEnd = Math.min(note.endTick(), barEnd);
-                long duration = effectiveEnd - noteStart;
-                if (duration <= 0) continue;
-
-                Element noteElem = appendElement(doc, measure, "note");
-                if (isChord) {
-                    appendElement(doc, noteElem, "chord");
-                }
-                Element pitch = appendElement(doc, noteElem, "pitch");
-                int pc = note.pitch() % 12;
-                appendTextElement(doc, pitch, "step", STEPS[pc]);
-                if (ALTERS[pc] != 0) {
-                    appendTextElement(doc, pitch, "alter", String.valueOf(ALTERS[pc]));
-                }
-                int octave = note.pitch() / 12 - 1;
-                appendTextElement(doc, pitch, "octave", String.valueOf(octave));
-                appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
-                String type = ticksToType(duration, divisions);
-                if (type != null) {
-                    appendTextElement(doc, noteElem, "type", type);
-                }
-
-                if (!isChord) {
-                    cursor = effectiveEnd;
-                    prevNoteStart = noteStart;
-                }
-            }
-
-            if (cursor < barEnd) {
-                addRest(doc, measure, barEnd - cursor, divisions);
-            }
-        }
+        writeMeasures(doc, part, notes, totalBars, ticksPerBar, ticksPerBeat, beatsPerBar,
+                divisions, tempoBpm, sentence.getKeyName(), null);
 
         // Write
         Transformer transformer = TransformerFactory.newInstance().newTransformer();
@@ -479,10 +384,7 @@ public class MusicXMLExporter {
         appendTextElement(doc, unpitched, "display-step", display.step());
         appendTextElement(doc, unpitched, "display-octave", String.valueOf(display.octave()));
         appendTextElement(doc, noteElem, "duration", String.valueOf(noteDuration));
-        String type = ticksToType(noteDuration, divisions);
-        if (type != null) {
-            appendTextElement(doc, noteElem, "type", type);
-        }
+        appendNoteType(doc, noteElem, noteDuration, divisions);
         if (isCymbal(ev.gmNote())) {
             appendTextElement(doc, noteElem, "notehead", "x");
         }
@@ -555,37 +457,44 @@ public class MusicXMLExporter {
             }
 
             long barStart = bar * ticksPerBar;
-            long barEnd = barStart + ticksPerBar;
-            long cursor = barStart;
-            long prevNoteStart = -1;
+            long sixteenth = divisions / 4L;
+            long cursor = 0; // relative to barStart
+            long prevQRelStart = -1;
 
             List<Note> barNotes = notes.stream()
-                    .filter(n -> n.endTick() > barStart && n.startTick() < barEnd)
+                    .filter(n -> n.endTick() > barStart && n.startTick() < barStart + ticksPerBar)
                     .sorted(Comparator.comparingLong(Note::startTick)
                             .thenComparingInt(Note::pitch))
                     .toList();
 
             for (Note note : barNotes) {
-                long noteStart = Math.max(note.startTick(), barStart);
-                boolean isChord = (noteStart == prevNoteStart);
+                long rawStart = Math.max(note.startTick(), barStart);
+                long relStart = rawStart - barStart;
+                long qRelStart = quantize(relStart, sixteenth);
+                qRelStart = Math.max(0, Math.min(ticksPerBar - sixteenth, qRelStart));
 
-                if (!isChord && noteStart > cursor) {
-                    addRest(doc, measure, noteStart - cursor, divisions);
+                boolean isChord = (qRelStart == prevQRelStart);
+
+                if (!isChord && qRelStart > cursor) {
+                    addRest(doc, measure, qRelStart - cursor, divisions);
                 }
 
                 if (note.isRest()) {
                     if (!isChord) {
-                        long dur = Math.min(note.endTick(), barEnd) - noteStart;
-                        addRest(doc, measure, dur, divisions);
-                        cursor = noteStart + dur;
-                        prevNoteStart = noteStart;
+                        long rawDur = Math.min(note.endTick(), barStart + ticksPerBar) - rawStart;
+                        long qDur = Math.max(sixteenth, quantize(rawDur, sixteenth));
+                        qDur = Math.min(qDur, ticksPerBar - qRelStart);
+                        addRest(doc, measure, qDur, divisions);
+                        cursor = qRelStart + qDur;
+                        prevQRelStart = qRelStart;
                     }
                     continue;
                 }
 
-                long effectiveEnd = Math.min(note.endTick(), barEnd);
-                long duration = effectiveEnd - noteStart;
-                if (duration <= 0) continue;
+                long rawDur = note.endTick() - note.startTick();
+                long qDur = Math.max(sixteenth, quantize(rawDur, sixteenth));
+                qDur = Math.min(qDur, ticksPerBar - qRelStart);
+                if (qDur <= 0) continue;
 
                 Element noteElem = appendElement(doc, measure, "note");
                 if (isChord) {
@@ -599,20 +508,17 @@ public class MusicXMLExporter {
                 }
                 int octave = note.pitch() / 12 - 1;
                 appendTextElement(doc, pitch, "octave", String.valueOf(octave));
-                appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
-                String type = ticksToType(duration, divisions);
-                if (type != null) {
-                    appendTextElement(doc, noteElem, "type", type);
-                }
+                appendTextElement(doc, noteElem, "duration", String.valueOf(qDur));
+                appendNoteType(doc, noteElem, qDur, divisions);
 
                 if (!isChord) {
-                    cursor = effectiveEnd;
-                    prevNoteStart = noteStart;
+                    cursor = qRelStart + qDur;
+                    prevQRelStart = qRelStart;
                 }
             }
 
-            if (cursor < barEnd) {
-                addRest(doc, measure, barEnd - cursor, divisions);
+            if (cursor < ticksPerBar) {
+                addRest(doc, measure, ticksPerBar - cursor, divisions);
             }
         }
     }
@@ -621,9 +527,36 @@ public class MusicXMLExporter {
         Element note = appendElement(doc, measure, "note");
         appendElement(doc, note, "rest");
         appendTextElement(doc, note, "duration", String.valueOf(durationTicks));
-        String type = ticksToType(durationTicks, divisions);
-        if (type != null) {
-            appendTextElement(doc, note, "type", type);
+        appendNoteType(doc, note, durationTicks, divisions);
+    }
+
+    private static long quantize(long ticks, long grid) {
+        return Math.round((double) ticks / grid) * grid;
+    }
+
+    private static void appendNoteType(Document doc, Element noteElem, long dur, int divisions) {
+        long sixteenth = divisions / 4L;
+        long n = (sixteenth > 0) ? dur / sixteenth : 0;
+        String type;
+        boolean dotted;
+        switch ((int) n) {
+            case 1  -> { type = "16th";    dotted = false; }
+            case 2  -> { type = "eighth";  dotted = false; }
+            case 3  -> { type = "eighth";  dotted = true;  }
+            case 4  -> { type = "quarter"; dotted = false; }
+            case 6  -> { type = "quarter"; dotted = true;  }
+            case 8  -> { type = "half";    dotted = false; }
+            case 12 -> { type = "half";    dotted = true;  }
+            case 16 -> { type = "whole";   dotted = false; }
+            default -> {
+                String approx = ticksToType(dur, divisions);
+                if (approx != null) appendTextElement(doc, noteElem, "type", approx);
+                return;
+            }
+        }
+        appendTextElement(doc, noteElem, "type", type);
+        if (dotted) {
+            appendElement(doc, noteElem, "dot");
         }
     }
 
