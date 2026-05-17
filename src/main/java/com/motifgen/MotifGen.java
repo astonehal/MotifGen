@@ -192,8 +192,8 @@ public class MotifGen {
             BassTrack bass = BassTrackGenerator.generate(sentence, profile, tempo);
             DrumTrack drums = generateDrums(sentence, profile, bass);
 
-            // Generate 4-bar intro
-            IntroTrack intro = generateIntro(sentence, profile);
+            // Generate variable-length intro
+            IntroTrack intro = generateIntro(sentence, profile, backing, drums);
 
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
@@ -235,13 +235,20 @@ public class MotifGen {
     }
 
     /**
-     * Generates a 4-bar intro for the given sentence and sentiment profile.
+     * Generates a variable-length intro for the given sentence and sentiment profile.
+     *
+     * <p>The first chord root is extracted from the backing track's first note (normalised to the
+     * guitar register [40, 76]). The drum archetype is derived from arousal using the same mapping
+     * used by {@link #generateDrums}.
      *
      * @param sentence melody sentence (used for PPQ and beats-per-bar)
      * @param profile  sentiment profile (drives archetype and vamp selection)
+     * @param backing  backing track — first note pitch used as sentence chord root
+     * @param drums    drum track — archetype derived from arousal (not stored on DrumTrack)
      * @return best intro track from {@link IntroGenerator}
      */
-    private static IntroTrack generateIntro(Sentence sentence, SentimentProfile profile) {
+    private static IntroTrack generateIntro(Sentence sentence, SentimentProfile profile,
+            BackingTrack backing, DrumTrack drums) {
         int ppq = sentence.getPhrases().isEmpty()
                 ? 480
                 : sentence.getPhrases().getFirst().getTicksPerBeat();
@@ -260,14 +267,35 @@ public class MotifGen {
             // Use default key.
         }
 
-        // Derive archetype from arousal: high → driving, mid → folk, low → ballad.
         double arousal = profile != null ? profile.arousal() : 0.5;
         String archetype = arousal > 0.7 ? "driving" : arousal > 0.45 ? "folk" : "ballad";
+        DrumGrooveArchetype drumArch = archetypeFromArousal(arousal);
 
+        // Extract first chord root from the backing track; fall back to key root.
+        int firstChordRoot = key.root();
+        if (backing != null && !backing.notes().isEmpty()) {
+            firstChordRoot = backing.notes().getFirst().note().pitch();
+        }
+
+        SentimentProfile effectiveProfile = profile != null
+                ? profile : SentimentProfile.fromVA(0.5, 0.5);
         IntroContext ctx = IntroContext.of(
-                profile != null ? profile : SentimentProfile.fromVA(0.5, 0.5),
-                key, archetype, ppq, beatsPerBar);
+                effectiveProfile, key, archetype, ppq, beatsPerBar,
+                firstChordRoot, drumArch);
         return new IntroGenerator().generate(ctx);
+    }
+
+    /**
+     * Derives a {@link DrumGrooveArchetype} from an arousal value using the same mapping
+     * applied in {@link #generateDrums}.
+     *
+     * @param arousal arousal in [0, 1]
+     * @return appropriate drum groove archetype
+     */
+    static DrumGrooveArchetype archetypeFromArousal(double arousal) {
+        if (arousal > 0.7) return DrumGrooveArchetype.DRIVING;
+        if (arousal > 0.45) return DrumGrooveArchetype.FOLK;
+        return DrumGrooveArchetype.BALLAD;
     }
 
     /**
