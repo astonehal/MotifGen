@@ -5,11 +5,13 @@ import com.motifgen.guitar.backing.BassTrack;
 import com.motifgen.guitar.backing.ChanneledNote;
 import com.motifgen.guitar.backing.DrumEvent;
 import com.motifgen.guitar.backing.DrumTrack;
+import com.motifgen.intro.IntroTrack;
 import com.motifgen.model.Note;
 import com.motifgen.model.Sentence;
 
 import javax.sound.midi.*;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -420,6 +422,314 @@ public class MidiExporter {
                 .mapToLong(e -> e.startTick() + e.durationTicks())
                 .max().orElse(melodyEnd) + ticksPerBeat;
         drumTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), drumEnd));
+
+        MidiSystem.write(sequence, 1, outputFile);
+    }
+
+    // -------------------------------------------------------------------------
+    // Intro overloads — prepend IntroTrack before the sentence
+    // -------------------------------------------------------------------------
+
+    /**
+     * Exports a Type-1 MIDI file with a 4-bar intro prepended before the melody sentence.
+     *
+     * <p>All sentence note ticks are shifted by {@code intro.offsetTicks()}. The intro guitar and
+     * bass tracks use the same channel assignments as the backing/bass tracks (ch 1 and ch 2). The
+     * intro drum track uses channel 9 (GM percussion). The melody uses channel 0.
+     *
+     * @param intro      4-bar intro track
+     * @param sentence   the melody sentence
+     * @param outputFile destination MIDI file
+     * @throws Exception if MIDI I/O fails
+     */
+    public static void export(IntroTrack intro, Sentence sentence, File outputFile)
+            throws Exception {
+        export(intro, sentence, outputFile, DEFAULT_TEMPO_BPM);
+    }
+
+    /**
+     * Exports a Type-1 MIDI file with a 4-bar intro prepended before the melody sentence at the
+     * given tempo.
+     *
+     * @param intro      4-bar intro track
+     * @param sentence   the melody sentence
+     * @param outputFile destination MIDI file
+     * @param tempoBpm   tempo in beats per minute
+     * @throws Exception if MIDI I/O fails
+     */
+    public static void export(IntroTrack intro, Sentence sentence, File outputFile,
+            int tempoBpm) throws Exception {
+        long offset = intro.offsetTicks();
+        List<Note> melodyNotes = sentence.getAllNotes();
+        int ticksPerBeat = sentence.getPhrases().getFirst().getTicksPerBeat();
+
+        Sequence sequence = new Sequence(Sequence.PPQ, ticksPerBeat);
+
+        // --- Track 0: melody (shifted) ---
+        Track melodyTrack = sequence.createTrack();
+        int microsPerBeat = 60_000_000 / tempoBpm;
+        byte[] tempoData = {
+                (byte) ((microsPerBeat >> 16) & 0xFF),
+                (byte) ((microsPerBeat >> 8)  & 0xFF),
+                (byte) (microsPerBeat & 0xFF)
+        };
+        melodyTrack.add(new MidiEvent(new MetaMessage(0x51, tempoData, 3), 0));
+        byte[] timeSigData = {4, 2, 24, 8};
+        melodyTrack.add(new MidiEvent(new MetaMessage(0x58, timeSigData, 4), 0));
+        String trackName = "MotifGen: " + sentence.getKeyName()
+                + " (" + sentence.getStructure() + ")";
+        melodyTrack.add(new MidiEvent(
+                new MetaMessage(0x03, trackName.getBytes(), trackName.length()), 0));
+        for (Note note : melodyNotes) {
+            if (note.isRest()) continue;
+            int pitch    = Math.max(0, Math.min(127, note.pitch()));
+            int velocity = Math.max(1, Math.min(127, note.velocity()));
+            melodyTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, CHANNEL, pitch, velocity),
+                    note.startTick() + offset));
+            melodyTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, CHANNEL, pitch, 0),
+                    note.endTick() + offset));
+        }
+        long melodyEnd = melodyNotes.stream().mapToLong(Note::endTick).max().orElse(0)
+                + offset + ticksPerBeat;
+        melodyTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        // --- Track 1: intro guitar (ch 1) ---
+        Track guitarTrack = sequence.createTrack();
+        String gName = "Intro Guitar";
+        guitarTrack.add(new MidiEvent(
+                new MetaMessage(0x03, gName.getBytes(), gName.length()), 0));
+        guitarTrack.add(new MidiEvent(
+                new ShortMessage(ShortMessage.PROGRAM_CHANGE, BackingTrack.BACKING_CHANNEL,
+                        BackingTrack.GUITAR_PROGRAM - 1, 0), 0));
+        for (ChanneledNote cn : intro.guitarEvents()) {
+            Note note = cn.note();
+            if (note.isRest()) continue;
+            int pitch    = Math.max(0, Math.min(127, note.pitch()));
+            int velocity = Math.max(1, Math.min(127, note.velocity()));
+            guitarTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, BackingTrack.BACKING_CHANNEL,
+                            pitch, velocity), note.startTick()));
+            guitarTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, BackingTrack.BACKING_CHANNEL,
+                            pitch, 0), note.endTick()));
+        }
+        guitarTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        // --- Track 2: intro bass (ch 2) ---
+        Track bassTrack = sequence.createTrack();
+        String bName = "Intro Bass";
+        bassTrack.add(new MidiEvent(
+                new MetaMessage(0x03, bName.getBytes(), bName.length()), 0));
+        bassTrack.add(new MidiEvent(
+                new ShortMessage(ShortMessage.PROGRAM_CHANGE, BassTrack.BASS_CHANNEL,
+                        BassTrack.BASS_PROGRAM - 1, 0), 0));
+        for (ChanneledNote cn : intro.bassEvents()) {
+            Note note = cn.note();
+            if (note.isRest()) continue;
+            int pitch    = Math.max(0, Math.min(127, note.pitch()));
+            int velocity = Math.max(1, Math.min(127, note.velocity()));
+            bassTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, BassTrack.BASS_CHANNEL,
+                            pitch, velocity), note.startTick()));
+            bassTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, BassTrack.BASS_CHANNEL,
+                            pitch, 0), note.endTick()));
+        }
+        bassTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        // --- Track 3: intro drums (ch 9) ---
+        Track drumTrack = sequence.createTrack();
+        String dName = "Intro Drums";
+        drumTrack.add(new MidiEvent(
+                new MetaMessage(0x03, dName.getBytes(), dName.length()), 0));
+        int drumChannel = DrumTrack.DRUM_CHANNEL;
+        for (DrumEvent ev : intro.drumEvents()) {
+            int gm  = Math.max(0, Math.min(127, ev.gmNote()));
+            int vel = Math.max(1, Math.min(127, ev.velocity()));
+            drumTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, drumChannel, gm, vel),
+                    ev.startTick()));
+            drumTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, drumChannel, gm, 0),
+                    ev.startTick() + ev.durationTicks()));
+        }
+        drumTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        MidiSystem.write(sequence, 1, outputFile);
+    }
+
+    /**
+     * Exports a full multi-track MIDI file with intro and sentence at the given tempo.
+     *
+     * <p>Track layout (4 tracks): 0=melody, 1=guitar, 2=bass, 3=drums. Intro and sentence
+     * notes for each instrument share the same track and channel so that DAWs route them
+     * identically — intro notes occupy ticks 0..offsetTicks, sentence notes start at offsetTicks.
+     *
+     * @param intro      4-bar intro track
+     * @param sentence   the melody sentence
+     * @param backing    sentence rhythm guitar backing
+     * @param bass       sentence bass track
+     * @param drums      sentence drum track
+     * @param outputFile destination MIDI file
+     * @throws Exception if MIDI I/O fails
+     */
+    public static void export(IntroTrack intro, Sentence sentence, BackingTrack backing,
+            BassTrack bass, DrumTrack drums, File outputFile) throws Exception {
+        export(intro, sentence, backing, bass, drums, outputFile, DEFAULT_TEMPO_BPM);
+    }
+
+    /**
+     * Exports a full multi-track MIDI file with intro and sentence at the given tempo.
+     *
+     * <p>Track layout (4 tracks): 0=melody, 1=guitar, 2=bass, 3=drums. Intro and sentence
+     * notes for each instrument share the same track and channel so that DAWs route them
+     * identically — intro notes occupy ticks 0..offsetTicks, sentence notes start at offsetTicks.
+     *
+     * @param intro      4-bar intro track
+     * @param sentence   the melody sentence
+     * @param backing    sentence rhythm guitar backing
+     * @param bass       sentence bass track
+     * @param drums      sentence drum track
+     * @param outputFile destination MIDI file
+     * @param tempoBpm   tempo in beats per minute
+     * @throws Exception if MIDI I/O fails
+     */
+    public static void export(IntroTrack intro, Sentence sentence, BackingTrack backing,
+            BassTrack bass, DrumTrack drums, File outputFile, int tempoBpm) throws Exception {
+        long offset = intro.offsetTicks();
+        List<Note> melodyNotes = sentence.getAllNotes();
+        int ticksPerBeat = sentence.getPhrases().getFirst().getTicksPerBeat();
+
+        Sequence sequence = new Sequence(Sequence.PPQ, ticksPerBeat);
+
+        int microsPerBeat = 60_000_000 / tempoBpm;
+        byte[] tempoData = {
+                (byte) ((microsPerBeat >> 16) & 0xFF),
+                (byte) ((microsPerBeat >> 8)  & 0xFF),
+                (byte) (microsPerBeat & 0xFF)
+        };
+        byte[] timeSigData = {4, 2, 24, 8};
+
+        long melodyEnd = melodyNotes.stream().mapToLong(Note::endTick).max().orElse(0)
+                + offset + ticksPerBeat;
+
+        // --- Track 0: melody (silence during intro, then sentence) ---
+        Track melodyTrack = sequence.createTrack();
+        melodyTrack.add(new MidiEvent(new MetaMessage(0x51, tempoData, 3), 0));
+        melodyTrack.add(new MidiEvent(new MetaMessage(0x58, timeSigData, 4), 0));
+        String trackName = "MotifGen: " + sentence.getKeyName()
+                + " (" + sentence.getStructure() + ")";
+        melodyTrack.add(new MidiEvent(
+                new MetaMessage(0x03, trackName.getBytes(), trackName.length()), 0));
+        for (Note note : melodyNotes) {
+            if (note.isRest()) continue;
+            int pitch    = Math.max(0, Math.min(127, note.pitch()));
+            int velocity = Math.max(1, Math.min(127, note.velocity()));
+            melodyTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, CHANNEL, pitch, velocity),
+                    note.startTick() + offset));
+            melodyTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, CHANNEL, pitch, 0),
+                    note.endTick() + offset));
+        }
+        melodyTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        // --- Track 1: guitar (intro + sentence on same channel) ---
+        int backingChannel = BackingTrack.BACKING_CHANNEL;
+        Track guitarTrack = sequence.createTrack();
+        guitarTrack.add(new MidiEvent(
+                new MetaMessage(0x03, "Guitar".getBytes(), 6), 0));
+        guitarTrack.add(new MidiEvent(
+                new ShortMessage(ShortMessage.PROGRAM_CHANGE, backingChannel,
+                        backing.program() - 1, 0), 0));
+        for (ChanneledNote cn : intro.guitarEvents()) {
+            Note note = cn.note();
+            if (note.isRest()) continue;
+            int p = Math.max(0, Math.min(127, note.pitch()));
+            int v = Math.max(1, Math.min(127, note.velocity()));
+            guitarTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, backingChannel, p, v),
+                    note.startTick()));
+            guitarTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, backingChannel, p, 0),
+                    note.endTick()));
+        }
+        for (ChanneledNote cn : backing.notes()) {
+            Note note = cn.note();
+            if (note.isRest()) continue;
+            int p = Math.max(0, Math.min(127, note.pitch()));
+            int v = Math.max(1, Math.min(127, note.velocity()));
+            guitarTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, backingChannel, p, v),
+                    note.startTick() + offset));
+            guitarTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, backingChannel, p, 0),
+                    note.endTick() + offset));
+        }
+        guitarTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        // --- Track 2: bass (intro + sentence on same channel) ---
+        int bassChannel = BassTrack.BASS_CHANNEL;
+        Track bassTrack = sequence.createTrack();
+        bassTrack.add(new MidiEvent(
+                new MetaMessage(0x03, "Bass Guitar".getBytes(), 11), 0));
+        bassTrack.add(new MidiEvent(
+                new ShortMessage(ShortMessage.PROGRAM_CHANGE, bassChannel,
+                        bass.program() - 1, 0), 0));
+        for (ChanneledNote cn : intro.bassEvents()) {
+            Note note = cn.note();
+            if (note.isRest()) continue;
+            int p = Math.max(0, Math.min(127, note.pitch()));
+            int v = Math.max(1, Math.min(127, note.velocity()));
+            bassTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, bassChannel, p, v),
+                    note.startTick()));
+            bassTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, bassChannel, p, 0),
+                    note.endTick()));
+        }
+        for (ChanneledNote cn : bass.notes()) {
+            Note note = cn.note();
+            if (note.isRest()) continue;
+            int p = Math.max(0, Math.min(127, note.pitch()));
+            int v = Math.max(1, Math.min(127, note.velocity()));
+            bassTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, bassChannel, p, v),
+                    note.startTick() + offset));
+            bassTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, bassChannel, p, 0),
+                    note.endTick() + offset));
+        }
+        bassTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
+
+        // --- Track 3: drums (intro + sentence on same channel) ---
+        int drumChannel = DrumTrack.DRUM_CHANNEL;
+        Track drumTrack = sequence.createTrack();
+        drumTrack.add(new MidiEvent(
+                new MetaMessage(0x03, "Drums".getBytes(), 5), 0));
+        for (DrumEvent ev : intro.drumEvents()) {
+            int gm  = Math.max(0, Math.min(127, ev.gmNote()));
+            int vel = Math.max(1, Math.min(127, ev.velocity()));
+            drumTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, drumChannel, gm, vel),
+                    ev.startTick()));
+            drumTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, drumChannel, gm, 0),
+                    ev.startTick() + ev.durationTicks()));
+        }
+        for (DrumEvent ev : drums.events()) {
+            int gm  = Math.max(0, Math.min(127, ev.gmNote()));
+            int vel = Math.max(1, Math.min(127, ev.velocity()));
+            drumTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_ON, drumChannel, gm, vel),
+                    ev.startTick() + offset));
+            drumTrack.add(new MidiEvent(
+                    new ShortMessage(ShortMessage.NOTE_OFF, drumChannel, gm, 0),
+                    ev.startTick() + ev.durationTicks() + offset));
+        }
+        drumTrack.add(new MidiEvent(new MetaMessage(0x2F, new byte[0], 0), melodyEnd));
 
         MidiSystem.write(sequence, 1, outputFile);
     }

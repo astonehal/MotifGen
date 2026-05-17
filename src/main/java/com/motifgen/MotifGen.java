@@ -13,6 +13,9 @@ import com.motifgen.guitar.backing.DrumGrooveArchetype;
 import com.motifgen.guitar.backing.DrumTrack;
 import com.motifgen.guitar.backing.DrumTrackGenerator;
 import com.motifgen.guitar.backing.HarmonyApproach;
+import com.motifgen.intro.IntroContext;
+import com.motifgen.intro.IntroGenerator;
+import com.motifgen.intro.IntroTrack;
 import com.motifgen.theory.KeySignature;
 import com.motifgen.loader.MotifLoader;
 import com.motifgen.model.Motif;
@@ -189,15 +192,18 @@ public class MotifGen {
             BassTrack bass = BassTrackGenerator.generate(sentence, profile, tempo);
             DrumTrack drums = generateDrums(sentence, profile, bass);
 
+            // Generate 4-bar intro
+            IntroTrack intro = generateIntro(sentence, profile);
+
             if (format == OutputFormat.MIDI || format == OutputFormat.BOTH) {
                 File midFile = new File(outDir, baseName + ".mid");
-                MidiExporter.export(sentence, backing, bass, drums, midFile, tempo);
+                MidiExporter.export(intro, sentence, backing, bass, drums, midFile, tempo);
                 System.out.println("    Exported MIDI to: " + midFile.getAbsolutePath());
             }
 
             if (format == OutputFormat.MUSICXML || format == OutputFormat.BOTH) {
                 File xmlFile = new File(outDir, baseName + ".musicxml");
-                MusicXMLExporter.export(sentence, backing, bass, drums, xmlFile, tempo);
+                MusicXMLExporter.export(intro, sentence, backing, bass, drums, xmlFile, tempo);
                 System.out.println("    Exported MusicXML to: " + xmlFile.getAbsolutePath());
             }
         }
@@ -226,6 +232,42 @@ public class MotifGen {
         if (second == null) second = ranked.get(1);
 
         return List.of(first, second);
+    }
+
+    /**
+     * Generates a 4-bar intro for the given sentence and sentiment profile.
+     *
+     * @param sentence melody sentence (used for PPQ and beats-per-bar)
+     * @param profile  sentiment profile (drives archetype and vamp selection)
+     * @return best intro track from {@link IntroGenerator}
+     */
+    private static IntroTrack generateIntro(Sentence sentence, SentimentProfile profile) {
+        int ppq = sentence.getPhrases().isEmpty()
+                ? 480
+                : sentence.getPhrases().getFirst().getTicksPerBeat();
+        int beatsPerBar = sentence.getPhrases().isEmpty()
+                ? 4
+                : sentence.getPhrases().getFirst().getBeatsPerBar();
+
+        KeySignature key = KeySignature.major(0);
+        try {
+            String keyName = sentence.getKeyName();
+            if (keyName != null && !keyName.isBlank()) {
+                key = keyName.toLowerCase().contains("minor")
+                        ? KeySignature.minor(0) : KeySignature.major(0);
+            }
+        } catch (Exception ignored) {
+            // Use default key.
+        }
+
+        // Derive archetype from arousal: high → driving, mid → folk, low → ballad.
+        double arousal = profile != null ? profile.arousal() : 0.5;
+        String archetype = arousal > 0.7 ? "driving" : arousal > 0.45 ? "folk" : "ballad";
+
+        IntroContext ctx = IntroContext.of(
+                profile != null ? profile : SentimentProfile.fromVA(0.5, 0.5),
+                key, archetype, ppq, beatsPerBar);
+        return new IntroGenerator().generate(ctx);
     }
 
     /**
