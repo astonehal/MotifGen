@@ -408,9 +408,13 @@ public class MusicXMLExporter {
 
             long barStart = bar * ticksPerBar;
             long barEnd = barStart + ticksPerBar;
+            // For the final bar, include events that land exactly at barEnd
+            // (e.g. crash+kick injected on the phrase downbeat at the sentence boundary).
+            boolean isLastBar = (bar == totalBars - 1);
             boolean anyInBar = false;
             for (DrumEvent ev : events) {
-                if (ev.startTick() < barStart || ev.startTick() >= barEnd) continue;
+                if (ev.startTick() < barStart) continue;
+                if (isLastBar ? ev.startTick() > barEnd : ev.startTick() >= barEnd) continue;
                 appendDrumNote(doc, measure, ev, divisions);
                 anyInBar = true;
             }
