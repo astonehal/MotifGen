@@ -407,14 +407,13 @@ class DrumTrackE2ETest {
   // ---------------------------------------------------------------------------
 
   /**
-   * Given a drum track is generated with tightness=0.88
-   * When humanization runs
-   * Then kick/snare timing varies at most 0.02 beats, others at most 0.05 beats,
-   *      velocities vary +/- 8.
+   * Given a drum track is generated
+   * When events are inspected
+   * Then all events lie on the clean 16th-note grid (no timing jitter) and
+   *      velocities are valid MIDI values.
    *
-   * <p>The implementation uses fixed tolerances (0.02, 0.05, 8). We compare each
-   * humanized event to its deterministic on-grid position (the closest sixteenth
-   * slot) and assert deviations stay within the documented envelopes.
+   * <p>Humanization was removed in issue #25 to guarantee export fidelity.
+   * Events are now quantized to the 16th-note grid with no deviation.
    */
   @Test
   void given_drumTrackGenerated_when_humanizationRuns_then_deviationsWithinDocumentedBounds() {
@@ -424,33 +423,16 @@ class DrumTrackE2ETest {
     DrumTrack drums = DrumTrackGenerator.generate(
         sentence, slots, null, DrumGrooveArchetype.DRIVING);
 
-    long kickSnareTol = Math.round(0.02 * TICKS_PER_BEAT);
-    long otherTol     = Math.round(0.05 * TICKS_PER_BEAT);
-    long sixteenth    = TICKS_PER_BEAT / 4L;
+    long sixteenth = TICKS_PER_BEAT / 4L;
 
-    int observedJitter = 0; // count of events with non-zero jitter
-    Set<Integer> distinctVelocities = new HashSet<>();
     for (DrumEvent e : drums.events()) {
-      // Find nearest sixteenth-grid tick.
-      long nearest = Math.round((double) e.startTick() / sixteenth) * sixteenth;
-      long diff = Math.abs(e.startTick() - nearest);
-      long tol = (e.gmNote() == DrumPattern.KICK || e.gmNote() == DrumPattern.SNARE)
-          ? kickSnareTol : otherTol;
-      assertTrue(diff <= tol,
+      long diff = e.startTick() % sixteenth;
+      assertEquals(0, diff,
           "Event GM=" + e.gmNote() + " at tick " + e.startTick()
-              + " deviates " + diff + " ticks from nearest sixteenth (tol=" + tol + ")");
-      if (diff > 0) observedJitter++;
+              + " is not on the 16th-note grid (remainder=" + diff + ")");
       assertTrue(e.velocity() >= 1 && e.velocity() <= 127,
           "Velocity must be in [1,127]; got " + e.velocity());
-      distinctVelocities.add(e.velocity());
     }
-
-    // Confirm humanization actually moved at least *some* events (so we know
-    // jitter is wired in, not all zeros).
-    assertTrue(observedJitter > 0, "Humanization must produce some non-zero jitter");
-    // Velocity humanization (+/-8) should produce multiple distinct velocities.
-    assertTrue(distinctVelocities.size() > 1,
-        "Velocity humanization must produce more than one distinct velocity");
   }
 
   // ---------------------------------------------------------------------------
