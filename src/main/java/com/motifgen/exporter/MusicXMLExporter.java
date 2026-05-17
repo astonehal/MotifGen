@@ -20,8 +20,10 @@ import javax.xml.transform.TransformerFactory;
 import javax.xml.transform.dom.DOMSource;
 import javax.xml.transform.stream.StreamResult;
 import java.io.File;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.TreeMap;
 
 /**
  * Exports a Sentence to MusicXML format.
@@ -383,12 +385,15 @@ public class MusicXMLExporter {
     }
 
     /**
-     * Writes percussion measures for the drum part using {@code <unpitched>}
-     * note elements. Cymbals use an "x" notehead; kick/snare use normal heads.
+     * Writes percussion measures for the drum part using {@code <unpitched>} note
+     * elements. Events are quantized to the nearest sixteenth-note grid before
+     * writing so that measure durations are exact. Simultaneous hits (same
+     * quantized tick) are grouped with {@code <chord/>}. Gaps are filled with rests.
      */
     private static void writeDrumMeasures(Document doc, Element partElem, DrumTrack drums,
             int totalBars, long ticksPerBar, int beatsPerBar, int divisions, int tempoBpm) {
         List<DrumEvent> events = drums.events();
+        long sixteenth = divisions / 4L;
 
         for (int bar = 0; bar < totalBars; bar++) {
             Element measure = appendElement(doc, partElem, "measure");
@@ -418,31 +423,63 @@ public class MusicXMLExporter {
             long barStart = bar * ticksPerBar;
             long barEnd = barStart + ticksPerBar;
             boolean isLastBar = (bar == totalBars - 1);
-            boolean anyInBar = false;
+
+            // Collect events in this bar and quantize each to the nearest sixteenth.
+            // Out-of-bar events (including humanization-jittered boundary hits) are
+            // clamped to the last sixteenth slot so they still appear in notation.
+            TreeMap<Long, List<DrumEvent>> byQuantizedTick = new TreeMap<>();
             for (DrumEvent ev : events) {
                 if (ev.startTick() < barStart) continue;
-                // Last bar has no upper bound: captures crash+kick placed on the phrase
-                // downbeat at the sentence boundary, including any humanization jitter.
                 if (!isLastBar && ev.startTick() >= barEnd) continue;
-                appendDrumNote(doc, measure, ev, divisions);
-                anyInBar = true;
+
+                long relTick = ev.startTick() - barStart;
+                long quantized = Math.round((double) relTick / sixteenth) * sixteenth;
+                // Clamp to valid range [0, ticksPerBar - sixteenth].
+                quantized = Math.max(0, Math.min(ticksPerBar - sixteenth, quantized));
+
+                byQuantizedTick.computeIfAbsent(quantized, k -> new ArrayList<>()).add(ev);
             }
-            if (!anyInBar) {
+
+            if (byQuantizedTick.isEmpty()) {
                 addRest(doc, measure, ticksPerBar, divisions);
+                continue;
+            }
+
+            long cursor = 0;
+            for (var entry : byQuantizedTick.entrySet()) {
+                long slotTick = entry.getKey();
+                List<DrumEvent> group = entry.getValue();
+
+                if (slotTick > cursor) {
+                    addRest(doc, measure, slotTick - cursor, divisions);
+                }
+
+                boolean firstInGroup = true;
+                for (DrumEvent ev : group) {
+                    appendDrumNote(doc, measure, ev, divisions, sixteenth, !firstInGroup);
+                    firstInGroup = false;
+                }
+                cursor = slotTick + sixteenth;
+            }
+
+            if (cursor < ticksPerBar) {
+                addRest(doc, measure, ticksPerBar - cursor, divisions);
             }
         }
     }
 
     private static void appendDrumNote(Document doc, Element measure, DrumEvent ev,
-            int divisions) {
+            int divisions, long noteDuration, boolean isChord) {
         Element noteElem = appendElement(doc, measure, "note");
+        if (isChord) {
+            appendElement(doc, noteElem, "chord");
+        }
         Element unpitched = appendElement(doc, noteElem, "unpitched");
         DrumDisplay display = drumDisplay(ev.gmNote());
         appendTextElement(doc, unpitched, "display-step", display.step());
         appendTextElement(doc, unpitched, "display-octave", String.valueOf(display.octave()));
-        long duration = Math.max(1, ev.durationTicks());
-        appendTextElement(doc, noteElem, "duration", String.valueOf(duration));
-        String type = ticksToType(duration, divisions);
+        appendTextElement(doc, noteElem, "duration", String.valueOf(noteDuration));
+        String type = ticksToType(noteDuration, divisions);
         if (type != null) {
             appendTextElement(doc, noteElem, "type", type);
         }
